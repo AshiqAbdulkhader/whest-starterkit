@@ -3,6 +3,7 @@
 Tag a fenced block with ```bash-test (instead of plain ```bash) to opt it into CI.
 This excludes blocks like `git clone`, `gh release`, etc. that can't run in CI.
 """
+
 from __future__ import annotations
 
 import re
@@ -29,7 +30,8 @@ def test_readme_bash_test_block_runs_cleanly(block: str):
     result = subprocess.run(
         ["bash", "-euo", "pipefail", "-c", block],
         cwd=REPO_ROOT,
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     assert result.returncode == 0, (
         f"README block failed:\n--- block ---\n{block}\n--- stdout ---\n"

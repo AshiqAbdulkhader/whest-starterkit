@@ -4,6 +4,7 @@ Stage 1 of the WhestBench ladder: just `flopscope` and the local engine. No CLI
 knowledge required. Once `predict()` returns something interesting, climb to
 Stage 2: `whest validate --estimator estimator.py`.
 """
+
 from __future__ import annotations
 
 import argparse

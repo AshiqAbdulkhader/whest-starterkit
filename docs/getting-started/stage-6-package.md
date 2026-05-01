@@ -58,4 +58,4 @@ submission ID — that's the quickest path to a human.
 |---|---|---|
 | Local Stage 4 score | ≈ leaderboard score within ~1–2% | Check Stage 4 vs Stage 3 first — drift between them surfaces the same bugs that the grader will hit |
 | `submission.tar.gz` size | Typically 2–10 KB without external deps; up to ~few MB with bundled wheels | If much larger, audit `requirements.txt` |
-| Grader runtime | A few minutes for the default suite | Slower than that suggests `untracked_time_s` issues — see [score-report-fields.md](../reference/score-report-fields.md) |
+| Grader runtime | A few minutes for the default suite | Slower than that suggests `residual_wall_time_s` issues — see [score-report-fields.md](../reference/score-report-fields.md) |

@@ -46,16 +46,17 @@ with flops.BudgetContext(flop_budget=10_000_000, wall_time_limit_s=2.0) as budge
 In WhestBench CLI runs, `--wall-time-limit` sets that same limit for each
 `predict()` call.
 
-## What is `untracked_time_limit`?
+## What is `residual_wall_time_limit`?
 
-`untracked_time_limit` is a WhestBench rule, not a `BudgetContext`
+`residual_wall_time_limit` is a WhestBench rule, not a `BudgetContext`
 parameter. flopscope reports:
 
-- `tracked_time_s`: time spent inside counted flopscope calls
-- `untracked_time_s`: total wall time minus tracked time
+- `flopscope_backend_time_s`: time spent inside counted flopscope calls
+- `flopscope_overhead_time_s`: time spent inside flopscope's own dispatch
+- `residual_wall_time_s`: wall time outside flopscope backend and dispatch work
 
-WhestBench can then zero predictions if `untracked_time_s` exceeds the
-configured `--untracked-time-limit`.
+WhestBench can then zero predictions if `residual_wall_time_s` exceeds the
+configured `--residual-wall-time-limit`.
 
 ## What happens if I exceed the FLOP budget?
 

@@ -1,4 +1,5 @@
 """Unit tests for local_engine helpers."""
+
 from __future__ import annotations
 
 import flopscope.numpy as fnp
@@ -124,9 +125,7 @@ def test_compare_against_mc_runs_clean_on_zeros_estimator(capsys):
             return fnp.zeros((mlp.depth, mlp.width))
 
     mlp = build_mlp(width=4, depth=2, seed=0)
-    result = compare_against_monte_carlo(
-        ZerosEstimator(), mlp, sample_counts=(10, 100)
-    )
+    result = compare_against_monte_carlo(ZerosEstimator(), mlp, sample_counts=(10, 100))
 
     assert result is None
     out = capsys.readouterr().out
@@ -136,13 +135,16 @@ def test_compare_against_mc_runs_clean_on_zeros_estimator(capsys):
     assert "100" in out
 
 
-@pytest.mark.parametrize("name,max_mse", [
-    # Update these tolerances if the curriculum table changes.
-    ("examples/01_random.py", 1.0),
-    ("examples/02_mean_propagation.py", 0.10),
-    ("examples/03_covariance_propagation.py", 0.10),
-    ("examples/04_combined.py", 0.10),
-])
+@pytest.mark.parametrize(
+    "name,max_mse",
+    [
+        # Update these tolerances if the curriculum table changes.
+        ("examples/01_random.py", 1.0),
+        ("examples/02_mean_propagation.py", 0.10),
+        ("examples/03_covariance_propagation.py", 0.10),
+        ("examples/04_combined.py", 0.10),
+    ],
+)
 def test_example_mse_within_table_tolerance(name, max_mse):
     """examples/README.md advertises MSE values; CI keeps them honest."""
     import re
@@ -151,7 +153,9 @@ def test_example_mse_within_table_tolerance(name, max_mse):
 
     result = subprocess.run(
         [sys.executable, name],
-        capture_output=True, text=True, check=True,
+        capture_output=True,
+        text=True,
+        check=True,
     )
     last_line = [line for line in result.stdout.splitlines() if line.strip()][-1]
     mse_match = re.search(r"(\d+\.\d+)\s*$", last_line)

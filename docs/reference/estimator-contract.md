@@ -30,7 +30,7 @@ Optional lifecycle hooks:
   predict(mlp_1, b)     ──▶  one call per MLP
   predict(mlp_2, b)            • runs INSIDE a BudgetContext
   ...                          • bounded by --flop-budget and (optionally)
-  predict(mlp_M, b)              --wall-time-limit / --untracked-time-limit
+  predict(mlp_M, b)              --wall-time-limit / --residual-wall-time-limit
        │
        ▼
   teardown()            ──▶  one call after all predict() calls
@@ -87,7 +87,7 @@ surfaced as report data so that one bad MLP doesn't take down the run.
 | `predict()` raised an exception | predictions for this MLP zeroed; harness continues to the next MLP; CLI exits `1` and prints an "Estimator Errors" panel | `per_mlp[i].{error, error_code, traceback}`; `error_code` is the Python exception class name | Stage 3 (`whest run`) |
 | Exceeded `flop_budget` | flopscope raises `BudgetExhaustedError` *before* the over-budget op runs; predictions zeroed | `per_mlp[i].budget_exhausted: true` | Stage 3 |
 | Exceeded `--wall-time-limit` (`wall_time_limit_s`) | flopscope raises `TimeExhaustedError`; predictions zeroed | `per_mlp[i].time_exhausted: true` | Stage 3 (with `--wall-time-limit`) |
-| Exceeded `--untracked-time-limit` | scoring layer (not flopscope) zeroes the predictions after `predict()` returns | `per_mlp[i].untracked_time_exhausted: true` | Stage 3 (with `--untracked-time-limit`) |
+| Exceeded `--residual-wall-time-limit` | scoring layer (not flopscope) zeroes the predictions after `predict()` returns | `per_mlp[i].residual_wall_time_exhausted: true` | Stage 3 (with `--residual-wall-time-limit`) |
 
 When `predict()` raises, the runner captures the exception, records the
 class name in `error_code`, and forwards a formatted `traceback` (subprocess

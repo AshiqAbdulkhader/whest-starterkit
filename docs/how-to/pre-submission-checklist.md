@@ -24,8 +24,8 @@ checks; each one maps to a single command or a one-line confirmation.
 - [ ] In the run report, **`per_mlp[i].budget_exhausted` is `false`** for
       every MLP. Any `true` means that MLP scored against zeros.
 - [ ] **`per_mlp[i].time_exhausted`** and
-      **`untracked_time_exhausted`** are also `false` (only relevant if
-      you set `--wall-time-limit` or `--untracked-time-limit`).
+      **`residual_wall_time_exhausted`** are also `false` (only relevant if
+      you set `--wall-time-limit` or `--residual-wall-time-limit`).
 - [ ] **`flops_used`** is comfortably under
       `flop_budget` — leaves headroom for the harder MLPs in the grader
       suite.
@@ -53,7 +53,7 @@ checks; each one maps to a single command or a one-line confirmation.
       `setup_timeout_s`. Heavy precompute belongs in
       `SetupContext.scratch_dir`.
 - [ ] No `print()` left in `predict()`. The grader runs many MLPs;
-      stdout flooding is a reliable way to lose `untracked_time_s`.
+      stdout flooding is a reliable way to lose `residual_wall_time_s`.
 
 ## Final command
 

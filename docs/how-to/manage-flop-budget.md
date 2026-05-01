@@ -72,13 +72,14 @@ This prints a table showing each operation's name, call count, and cumulative FL
 The same summaries also show timing data:
 
 - `wall_time_s`: total elapsed time for the context
-- `tracked_time_s`: time spent inside counted flopscope calls
-- `untracked_time_s`: time spent outside counted flopscope calls
+- `flopscope_backend_time_s`: time spent inside counted flopscope backend calls
+- `flopscope_overhead_time_s`: time spent inside flopscope dispatch and bookkeeping
+- `residual_wall_time_s`: time spent outside flopscope backend and dispatch work
 
 In `whest run`, the CLI flags map to these concepts as follows:
 
 - `--wall-time-limit`: forwards a wall-clock limit into the estimator's `BudgetContext`
-- `--untracked-time-limit`: adds a WhestBench scoring check on the reported `untracked_time_s`
+- `--residual-wall-time-limit`: adds a WhestBench scoring check on the reported `residual_wall_time_s`
 
 ## Interpret `whest run` output
 

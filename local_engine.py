@@ -100,6 +100,7 @@ def compare_against_monte_carlo(
             est_pred = estimator.predict(mlp, estimator_budget)
     except Exception as exc:
         import inspect
+
         try:
             src_file = inspect.getsourcefile(type(estimator))
         except TypeError:

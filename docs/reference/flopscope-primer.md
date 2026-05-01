@@ -114,8 +114,8 @@ that the harness passed in.
 | `flop_multiplier` | `float` | Per-context FLOP scaler (default 1.0). |
 | `wall_time_s` | `float` | Elapsed wall time since the context was entered. |
 | `wall_time_limit_s` | `float \| None` | Cap configured at construction time. |
-| `total_tracked_time` | `float` | Time spent inside counted flopscope calls. |
-| `untracked_time` | `float` | Wall time inside the context that is neither tracked numpy nor flopscope's own dispatch — i.e. participant Python (loops, control flow), GC, uninstrumented numpy. |
+| `flopscope_backend_time` | `float` | Time spent inside counted flopscope calls. |
+| `residual_wall_time` | `float` | Wall time inside the context that is neither flopscope backend execution nor flopscope's own dispatch — i.e. participant Python (loops, control flow), GC, uninstrumented numpy. |
 | `elapsed_s` | `float` | Alias of `wall_time_s` for symmetry with the report. |
 | `namespace` | `str \| None` | Namespace this context attributes ops to (set via `with flops.namespace("name")`). |
 | `op_log` | `list[OpRecord]` | Per-op record (only populated under `--profile`). |
@@ -136,13 +136,17 @@ The session-wide `flops.budget_summary()` and `flops.budget_summary_dict()`
 aggregate across every context entered in the current Python process —
 useful when you're profiling a multi-stage pipeline.
 
-Both summaries also include four timing fields that satisfy a strict
-decomposition identity, `wall_time_s ≈ tracked_time_s + flopscope_overhead_time_s + untracked_time_s`:
+Both summaries also include four timing fields that satisfy this strict
+timing identity:
+
+```text
+wall_time_s = flopscope_backend_time_s + flopscope_overhead_time_s + residual_wall_time_s
+```
 
 - `wall_time_s`: total elapsed time in the context
-- `tracked_time_s`: time spent inside counted flopscope numpy kernels (the participant's actual numpy compute)
+- `flopscope_backend_time_s`: time spent inside counted flopscope numpy kernels (the participant's actual numpy compute)
 - `flopscope_overhead_time_s`: time spent inside flopscope's own dispatch (wrapper preambles, FLOP bookkeeping, namespace push/pop) — framework cost, not participant cost
-- `untracked_time_s`: everything else — participant Python, GC, uninstrumented numpy
+- `residual_wall_time_s`: everything else — participant Python, GC, uninstrumented numpy
 
 This decomposition lets you see whether time is going to numpy compute, framework dispatch, or your own Python.
 
@@ -152,12 +156,13 @@ Flopscope itself only knows about `wall_time_limit_s` on `BudgetContext`.
 WhestBench adds two run-level knobs on top:
 
 - `--wall-time-limit`: passed through to the estimator's `BudgetContext`
-- `--untracked-time-limit`: enforced by WhestBench after `predict()` returns,
-  using the reported `untracked_time_s`. Because `untracked_time_s` no longer
-  includes flopscope's own dispatch time, this gate measures only your
-  Python work — not the framework's bookkeeping tax.
+- `--residual-wall-time-limit`: enforced by WhestBench after `predict()` returns,
+  using the reported `residual_wall_time_s`. Because `residual_wall_time_s`
+  excludes flopscope backend and dispatch time, this gate measures only your
+  Python and uninstrumented work — not numpy backend execution or the
+  framework's bookkeeping tax.
 
-So if you see `untracked_time_exhausted` in a report, that came from
+So if you see `residual_wall_time_exhausted` in a report, that came from
 WhestBench scoring logic, not from a `BudgetContext` parameter.
 
 ## Common Gotchas

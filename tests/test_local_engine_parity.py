@@ -1,5 +1,6 @@
 """Parity test: local_engine.build_mlp must produce statistically equivalent
 MLPs to whestbench.sample_mlp. Catches pedagogical drift from upstream."""
+
 from __future__ import annotations
 
 import flopscope.numpy as fnp
@@ -24,8 +25,8 @@ def test_build_mlp_matches_whestbench_sample_mlp_distribution():
     for layer_idx, (lw, uw) in enumerate(zip(local.weights, upstream.weights)):
         assert lw.shape == uw.shape, f"layer {layer_idx} shape mismatch"
 
-        local_var = float(fnp.mean(lw ** 2))
-        upstream_var = float(fnp.mean(uw ** 2))
+        local_var = float(fnp.mean(lw**2))
+        upstream_var = float(fnp.mean(uw**2))
         assert local_var == pytest.approx(upstream_var, rel=0.10), (
             f"layer {layer_idx}: variance {local_var} drifts >10% from "
             f"whestbench.sample_mlp's {upstream_var}"
@@ -33,6 +34,4 @@ def test_build_mlp_matches_whestbench_sample_mlp_distribution():
 
         local_mean = float(fnp.mean(lw))
         upstream_mean = float(fnp.mean(uw))
-        assert abs(local_mean - upstream_mean) < 0.01, (
-            f"layer {layer_idx}: mean drift exceeds 0.01"
-        )
+        assert abs(local_mean - upstream_mean) < 0.01, f"layer {layer_idx}: mean drift exceeds 0.01"

@@ -51,9 +51,10 @@ each counted flopscope/NumPy call. If it is exceeded, flopscope raises
 
 | Category | Operations | Cost |
 |----------|-----------|------|
-| **Free** (0 FLOPs) | `fnp.array`, `fnp.zeros`, `fnp.ones`, `fnp.eye`, `fnp.asarray`, `fnp.reshape`, `.T`, indexing, `fnp.stack`, `fnp.concatenate`, `.copy()`, `.astype()` | 0 |
+| **Free** (0 FLOPs) | `fnp.array`, `fnp.zeros`, `fnp.ones`, `fnp.eye`, `fnp.asarray`, `fnp.reshape`, `.T`, indexing, `fnp.stack`, `fnp.concatenate`, `.copy()`, `.astype()`, `fnp.random.default_rng(seed)` (constructing the RNG) | 0 |
 | **Pointwise** (1 FLOP/element) | `+`, `-`, `*`, `/`, `fnp.exp`, `fnp.sqrt`, `fnp.abs`, `fnp.maximum`, `fnp.where`, `fnp.log`, comparisons | N elements |
 | **Reductions** (input size) | `fnp.sum`, `fnp.mean`, `fnp.var`, `fnp.max`, `fnp.min`, `fnp.all`, `fnp.any` | N elements |
+| **Random samplers** | `rng.standard_normal(n)`, `rng.uniform(...)`, `fnp.random.standard_normal(...)` and module-level analogs; same for `RandomState(seed)` | calibrated per method (default ~16 FLOPs/element for `standard_normal`; lower weights for cheap samplers like `uniform`) |
 | **Matmul** | `@`, `fnp.matmul` | M * N * K for (M,N) @ (N,K) |
 
 **Key insight:** Matmul dominates. A single `(100, 100) @ (100, 100)` costs 1M FLOPs. A pointwise `exp` on 100 elements costs 100 FLOPs.
@@ -79,12 +80,24 @@ All array creation is **free** (0 FLOPs).
 import flopscope as flops
 import flopscope.numpy as fnp
 
-rng = fnp.random.default_rng(42)            # seeded RNG
-x = rng.standard_normal((1000, 64))        # Gaussian samples
+rng = fnp.random.default_rng(42)            # seeded RNG (free)
+x = rng.standard_normal((1000, 64))         # ~64,000 × 16 FLOPs charged
 x = x.astype(fnp.float32)                   # cast to float32 (free)
 ```
 
-Random generation itself is free. FLOPs are counted when you operate on the arrays.
+Random samplers **are FLOP-counted** ([flopscope#81](https://github.com/AIcrowd/flopscope/pull/81)):
+`rng.standard_normal(...)`, `rng.uniform(...)`, and the module-level
+analogs (`fnp.random.standard_normal(...)`, etc.) all deduct from the
+active `BudgetContext` and return `FlopscopeArray`. The same holds for
+`fnp.random.RandomState(seed)`. Constructing the RNG itself is free;
+only the sampling methods cost FLOPs. Cross-API parity is guaranteed —
+the three idioms above all charge the same FLOPs for the same physical
+sample count.
+
+Per-method weights are calibrated empirically (default ~16 FLOPs per
+element for `standard_normal`; cheaper methods like `uniform` have
+lower weights). See `flopscope.numpy.random._registry` upstream for the
+authoritative table.
 
 ## Budget Inspection
 

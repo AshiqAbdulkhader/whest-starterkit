@@ -33,8 +33,8 @@ Wrap your estimator logic in a `BudgetContext` to see how many FLOPs it consumes
 ```python
 import flopscope as flops
 
-with flops.BudgetContext(flop_budget=17_000_000_000) as budget:
-    result = estimator.predict(mlp, budget=17_000_000_000)
+with flops.BudgetContext(flop_budget=68_000_000_000) as budget:
+    result = estimator.predict(mlp, budget=68_000_000_000)
 
 print(f"FLOPs used: {budget.flops_used:,}")
 print(f"FLOPs remaining: {budget.flops_remaining:,}")
@@ -45,10 +45,10 @@ If you also want a wall-clock guardrail while debugging locally, set
 
 ```python
 with flops.BudgetContext(
-    flop_budget=17_000_000_000,
+    flop_budget=68_000_000_000,
     wall_time_limit_s=2.0,
 ) as budget:
-    result = estimator.predict(mlp, budget=17_000_000_000)
+    result = estimator.predict(mlp, budget=68_000_000_000)
 ```
 
 ## Get a per-operation breakdown
@@ -60,8 +60,8 @@ consume the most FLOPs:
 ```python
 import flopscope as flops
 
-with flops.BudgetContext(flop_budget=17_000_000_000) as budget:
-    result = estimator.predict(mlp, budget=17_000_000_000)
+with flops.BudgetContext(flop_budget=68_000_000_000) as budget:
+    result = estimator.predict(mlp, budget=68_000_000_000)
     print(budget.summary())
 
 flops.budget_summary()
@@ -109,14 +109,14 @@ The table below profiles [`examples/02_mean_propagation.py`](../../examples/02_m
 | `fnp.stack(rows, axis=0)` | 1 | 2,048 | <0.1% |
 | **Total per `predict()`** | — | **269,058,048** | — |
 
-The full ~269 M FLOPs spends only ~1.6% of the default 1.7e10 grader budget, so mean propagation lands well below the multiplier floor at this shape — see [Scoring Model](../concepts/scoring-model.md#example-estimator-benchmarks).
+The full ~269 M FLOPs spends only ~0.4% of the default 6.8e10 grader budget, so mean propagation lands well below the multiplier floor at this shape — see [Scoring Model](../concepts/scoring-model.md#example-estimator-benchmarks).
 
 Two takeaways:
 
 - **`matmul` dwarfs everything else.** 99.8% of `predict()` cost is two matmuls per layer. Halving the matmul count (e.g., switching to a diagonal-only formulation, or fusing into a single `einsum` like `examples/03_covariance_propagation.py` does for the symmetric cov-update) buys you most of that back.
 - **Reductions, sqrt, and divides are free in practice.** Don't twist your code to avoid them; the cost is in the tens of FLOPs per layer.
 
-The same pattern holds for `examples/03_covariance_propagation.py`, where the `O(width³)` symmetry-aware `einsum` lands at ~337 M FLOPs per `predict()` (~2% of the grader budget) — a few × more expensive than mean propagation, but still leaving plenty of headroom.
+The same pattern holds for `examples/03_covariance_propagation.py`, where the `O(width³)` symmetry-aware `einsum` lands at ~337 M FLOPs per `predict()` (~0.5% of the grader budget) — a few × more expensive than mean propagation, but still leaving plenty of headroom.
 
 ## Optimization tips
 

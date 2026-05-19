@@ -12,7 +12,7 @@ Stage 2 confirms the contract. Stage 3 actually scores you against the same MLPs
 uv run whest run --estimator estimator.py --runner local
 ```
 
-The default runner is `local` — you can omit `--runner local`. Defaults match the grader: `--n-mlps 10`, `--width 256`, `--depth 8`, `--flop-budget 1.7e10` (17B effective-compute budget), `--wall-time-limit 60.0`. See [CLI Reference](../reference/cli-reference.md) for the full list.
+The default runner is `local` — you can omit `--runner local`. Defaults match the grader: `--n-mlps 10`, `--width 256`, `--depth 8`, `--flop-budget 6.8e10` (68B effective-compute budget), `--wall-time-limit 60.0`. See [CLI Reference](../reference/cli-reference.md) for the full list.
 
 You'll see a Rich-rendered report with five panels:
 
@@ -61,7 +61,7 @@ For an estimator that seeds both predict-time (`mlp.seed`) and setup-time (`ctx.
 
 ## FLOP-budget callout: Stage 1 vs Stage 3
 
-Stage 1's `local_engine.compare_against_monte_carlo` uses `estimator_budget=1e9` (more headroom for prototyping at the tiny standalone shape). Stage 3's default is `flop_budget=1.7e10` (the grader effective-compute budget — caps `C_m = F_m + λ·R_m`, not just analytical FLOPs). If your estimator's cost grows fast (e.g. covariance propagation at large widths), your Stage 3 score may differ from Stage 1 — try `--flop-budget 1e11` to confirm before optimizing.
+Stage 1's `local_engine.compare_against_monte_carlo` uses `estimator_budget=1e9` (more headroom for prototyping at the tiny standalone shape). Stage 3's default is `flop_budget=6.8e10` (the grader effective-compute budget — caps `C_m = F_m + λ·R_m`, not just analytical FLOPs). If your estimator's cost grows fast (e.g. covariance propagation at large widths), your Stage 3 score may differ from Stage 1 — try `--flop-budget 1e11` to confirm before optimizing.
 
 ## Why a different MSE than Stage 1?
 
@@ -87,7 +87,7 @@ def predict(self, mlp: MLP, budget: int) -> fnp.ndarray:
 | `03_covariance_propagation` | ~3.7e-6 |
 | `04_combined` | ~3.7e-6 (routes to covariance at the default budget) |
 
-Same underlying analytical methods as the Stage 1 table, but the numbers differ because Stage 3 uses the grader shape (`width=256, depth=8`, `flop_budget=1.7e10`) and applies the budget multiplier `max(0.1, C_m / B)` on top of the raw MSE. Full benchmark methodology in [scoring-model.md](../concepts/scoring-model.md#example-estimator-benchmarks).
+Same underlying analytical methods as the Stage 1 table, but the numbers differ because Stage 3 uses the grader shape (`width=256, depth=8`, `flop_budget=6.8e10`) and applies the budget multiplier `max(0.1, C_m / B)` on top of the raw MSE. Full benchmark methodology in [scoring-model.md](../concepts/scoring-model.md#example-estimator-benchmarks).
 
 ## ✅ When you're ready
 

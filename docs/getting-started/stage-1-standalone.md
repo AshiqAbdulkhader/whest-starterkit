@@ -55,7 +55,7 @@ This loads `examples/02_mean_propagation.py` and runs both estimators on the sam
 
 You're ready for Stage 2 once your estimator's MSE is comfortably below
 the zeros floor and `estimator_flops` stays under whatever budget you'd
-target downstream (Stage 3's grader default is `1.7e10` — the new effective-compute budget; see [Scoring Model](../concepts/scoring-model.md) for the `C_m = F_m + λ·R_m` formula).
+target downstream (Stage 3's grader default is `6.8e10` — the new effective-compute budget; see [Scoring Model](../concepts/scoring-model.md) for the `C_m = F_m + λ·R_m` formula).
 
 ## ✅ When you're ready
 

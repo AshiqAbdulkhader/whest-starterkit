@@ -11,7 +11,7 @@ Use this page to understand how the leaderboard score is computed from your esti
 ```
    ┌─────────────────────────┐
    │  random MLP_m           │   one of M MLPs (default M=10)
-   │  flop_budget B          │   default B = 1.7e10
+   │  flop_budget B          │   default B = 6.8e10
    │  mlp.seed (per-MLP RNG) │   grader-supplied; same value under regrade
    └────────────┬────────────┘
                 │
@@ -110,7 +110,7 @@ final_layer_mse_m = mean over the `width` cells of MLP m's FINAL layer
                     of (pred − truth)²
 
   M  = number of MLPs in the suite (default 10; --n-mlps overrides)
-  B  = flop_budget (default 1.7e10; --flop-budget overrides)
+  B  = flop_budget (default 6.8e10; --flop-budget overrides)
   F_m = flops_used by your predict() for MLP m (analytical, via flopscope)
   R_m = residual_wall_time_s for MLP m (time NOT in flopscope kernels)
 ```
@@ -164,17 +164,17 @@ Suppose ground truth for an MLP's 3-neuron final layer is `[0.42, 0.38, 0.51]` a
                       = mean([0.0004, 0.0009, 0.0016])
                       = 0.000967
 
-That `0.000967` is this MLP's per-MLP `final_layer_mse_m`. Now apply the budget multiplier. Suppose `flop_budget = 1.7e10`, you used `flops_used = 1.34e8`, and `residual_wall_time_s = 0.12 s` (so `λ·R_m = 1e11 × 0.12 = 1.2e10`):
+That `0.000967` is this MLP's per-MLP `final_layer_mse_m`. Now apply the budget multiplier. Suppose `flop_budget = 6.8e10`, you used `flops_used = 1.34e8`, and `residual_wall_time_s = 0.48 s` (so `λ·R_m = 1e11 × 0.48 = 4.8e10`):
 
     C_m   = flops_used + λ·residual_wall_time_s
-          = 1.34e8 + 1.2e10
-          = 1.213e10                       ≈ 71.4% of budget
+          = 1.34e8 + 4.8e10
+          = 4.814e10                       ≈ 70.8% of budget
 
-    mult_m = max(0.1, C_m / B) = max(0.1, 0.714) = 0.714
+    mult_m = max(0.1, C_m / B) = max(0.1, 0.708) = 0.708
 
     s_m   = final_layer_mse_m × mult_m
-          = 0.000967 × 0.714
-          = 0.000691                       ← this MLP's contribution
+          = 0.000967 × 0.708
+          = 0.000684                       ← this MLP's contribution
 
 The leaderboard `adjusted_final_layer_score` is the **mean of `s_m` values across all MLPs** — a mean of budget-adjusted per-MLP scores, not a mean of raw MSEs.
 
@@ -182,22 +182,22 @@ If your residual wall time were much larger (say 5s of Python looping), `λ·R_m
 
 ## Example estimator benchmarks
 
-The table below shows real scores from the four bundled example estimators, run with default settings (`width=256`, `depth=8`, `n_mlps=10`, `flop_budget=1.7e10`, `--seed 42`). Use these as calibration points for your own estimator.
+The table below shows real scores from the four bundled example estimators, run with default settings (`width=256`, `depth=8`, `n_mlps=10`, `flop_budget=6.8e10`, `--seed 42`). Use these as calibration points for your own estimator.
 
 | Estimator | `adjusted_final_layer_score` | `final_layer_mse` | `all_layers_mse` | `mean_compute_utilization` | Approach |
 |---|---:|---:|---:|---:|---|
-| `01_random` | 5.6e-2 | 5.6e-1 | 4.2e-1 | 0.00014 | Uniform random values seeded from `mlp.seed`. The bundled [`estimator.py`](../../estimator.py) at the repo root is the true (all-zeros) baseline; running `uv run whest init <dir>` in a fresh directory produces the same template. |
-| `02_mean_propagation` | 7.7e-5 | 7.7e-4 | 4.3e-4 | 0.024 | Diagonal variance, O(depth × width²). ~700× better raw MSE than random. |
-| `03_covariance_propagation` | 3.7e-6 | 3.7e-5 | 1.8e-5 | 0.027 | Full covariance, O(depth × width³). ~20× better raw MSE than mean propagation. The pre-activation covariance `W^T cov W` is computed with `fnp.einsum("ij,ia,jb->ab", cov, w, w)` so flopscope tags the result symmetric and prunes redundant work. |
-| `04_combined` | 3.7e-6 | 3.7e-5 | 1.8e-5 | 0.027 | Routes to covariance when budget allows. At the default budget always routes to covariance — same numbers as `03`. |
+| `01_random` | 5.6e-2 | 5.6e-1 | 4.2e-1 | 3.5e-5 | Uniform random values seeded from `mlp.seed`. The bundled [`estimator.py`](../../estimator.py) at the repo root is the true (all-zeros) baseline; running `uv run whest init <dir>` in a fresh directory produces the same template. |
+| `02_mean_propagation` | 7.7e-5 | 7.7e-4 | 4.3e-4 | 0.0048 | Diagonal variance, O(depth × width²). ~700× better raw MSE than random. |
+| `03_covariance_propagation` | 3.7e-6 | 3.7e-5 | 1.8e-5 | 0.0067 | Full covariance, O(depth × width³). ~20× better raw MSE than mean propagation. The pre-activation covariance `W^T cov W` is computed with `fnp.einsum("ij,ia,jb->ab", cov, w, w)` so flopscope tags the result symmetric and prunes redundant work. |
+| `04_combined` | 3.7e-6 | 3.7e-5 | 1.8e-5 | 0.0067 | Routes to covariance when budget allows. At the default budget always routes to covariance — same numbers as `03`. |
 
 **How to read these numbers:**
 
-- The **0.1 multiplier floor is active for every baseline at the default budget.** All four baselines use under 4% of the effective compute, so `mean_score_multiplier` is pinned at `0.1` and `adjusted_final_layer_score = final_layer_mse × 0.1` across the board. To beat the floor you need an estimator that spends meaningfully more effective compute — see [Algorithm Ideas](../how-to/algorithm-ideas.md) for budget-aware approaches.
+- The **0.1 multiplier floor is active for every baseline at the default budget.** All four baselines use under 1% of the effective compute, so `mean_score_multiplier` is pinned at `0.1` and `adjusted_final_layer_score = final_layer_mse × 0.1` across the board. To beat the floor you need an estimator that spends meaningfully more effective compute — see [Algorithm Ideas](../how-to/algorithm-ideas.md) for budget-aware approaches.
 - **Random baseline** reflects the natural scale of the ground truth activations. Its raw `final_layer_mse ≈ 0.56` is what predicting random uniform values produces on the default ReLU MLP shape.
-- **Mean propagation** is ~700× more accurate than random — a huge improvement from a simple analytical formula with very low FLOP cost (~2% utilization).
-- **Covariance propagation** is another ~20× better, but costs O(width³) per layer. At width=256 this still uses only ~3% of the budget, so the multiplier floor still applies — the per-MLP score is `0.1 × final_layer_mse`.
-- **The combined estimator** routes to covariance whenever budget allows. At the default budget (1.7e10) and width=256, the routing threshold (30·width² = 1.97M) is always exceeded, so combined always picks covariance and the numbers are identical to `03`.
+- **Mean propagation** is ~700× more accurate than random — a huge improvement from a simple analytical formula with very low FLOP cost (~0.5% utilization).
+- **Covariance propagation** is another ~20× better, but costs O(width³) per layer. At width=256 this still uses only ~0.7% of the budget, so the multiplier floor still applies — the per-MLP score is `0.1 × final_layer_mse`.
+- **The combined estimator** routes to covariance whenever budget allows. At the default budget (6.8e10) and width=256, the routing threshold (30·width² = 1.97M) is always exceeded, so combined always picks covariance and the numbers are identical to `03`.
 
 To reproduce: `uv run whest run --estimator examples/<NN>_<name>.py --runner local --n-mlps 10 --seed 42` (e.g. `examples/02_mean_propagation.py`).
 

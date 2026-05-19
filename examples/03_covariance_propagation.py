@@ -37,7 +37,7 @@ import warnings
 
 import flopscope as flops
 import flopscope.numpy as fnp
-from whestbench import BaseEstimator
+from whestbench import BaseEstimator, SetupContext
 from whestbench.domain import MLP
 
 # The post-ReLU covariance update below — gain[i]*gain[j]*cov_pre[i,j] —
@@ -62,18 +62,19 @@ class Estimator(BaseEstimator):
     Seeding (whestbench contract -- see
     ``docs/reference/estimator-contract.md``): this estimator is deterministic,
     but it carries the canonical seeding scaffold so every bundled example
-    shows the pattern. ``self._init_rng`` is the submission-level RNG seeded
-    from ``SETUP_SEED``; the ``_rng`` line at the top of ``predict`` is the
-    per-MLP RNG seeded from ``mlp.seed``. Both are unused here because the
-    algorithm is purely analytical.
+    shows the pattern. ``self._setup_rng`` is the submission-level RNG seeded
+    from ``ctx.seed`` inside ``setup``; the ``_rng`` line at the top of
+    ``predict`` is the per-MLP RNG seeded from ``mlp.seed``. Both are unused
+    here because the algorithm is purely analytical.
     """
 
-    SETUP_SEED = 0xC0FFEE  # any fixed constant; this estimator does no random precompute
-
     def __init__(self) -> None:
+        self._setup_rng = None  # set from ctx.seed inside setup()
+
+    def setup(self, ctx: SetupContext) -> None:
         # Submission-level RNG; unused in this deterministic estimator but
         # carried here so every example shows the pattern.
-        self._init_rng = fnp.random.default_rng(self.SETUP_SEED)
+        self._setup_rng = fnp.random.default_rng(ctx.seed)
 
     def predict(self, mlp: MLP, budget: int) -> fnp.ndarray:
         """Predict per-layer output means via full covariance propagation.

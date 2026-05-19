@@ -33,19 +33,10 @@ Numerical stability:
 
 from __future__ import annotations
 
-import warnings
-
 import flopscope as flops
 import flopscope.numpy as fnp
 from whestbench import BaseEstimator, SetupContext
 from whestbench.domain import MLP
-
-# The post-ReLU covariance update below — gain[i]*gain[j]*cov_pre[i,j] —
-# is mathematically symmetric, but flopscope's static analysis cannot
-# prove that from the multiply alone. Silence the cosmetic warning so
-# the example's first-run output stays clean. See `flops.as_symmetric`
-# if you'd rather re-tag the result explicitly.
-warnings.filterwarnings("ignore", category=flops.SymmetryLossWarning)
 
 # If any diagonal entry of the covariance exceeds this value we rescale
 # to keep the arithmetic well-behaved in float32.
@@ -112,8 +103,16 @@ class Estimator(BaseEstimator):
             # --- Step 3: propagate through the linear layer ---
             # Pre-activation mean:         mu_pre  = W^T mu
             # Pre-activation covariance:   cov_pre = W^T cov W
+            #
+            # Use einsum (not the chained matmul `w.T @ cov @ w`) so flopscope
+            # detects that the two `w` operands are the same tensor and tags
+            # cov_pre as symmetric. Symmetry then flows through the post-ReLU
+            # outer-product update below (line ~140), so the resulting `cov`
+            # is also tagged symmetric — no SymmetryLossWarning to suppress.
+            # See https://github.com/AIcrowd/whestbench/issues/27 for the
+            # background.
             mu_pre = w.T @ mu
-            cov_pre = w.T @ cov @ w
+            cov_pre = fnp.einsum("ij,ia,jb->ab", cov, w, w)
 
             # Extract per-neuron pre-activation standard deviations from the
             # diagonal of cov_pre.

@@ -30,19 +30,10 @@ The two paths differ only in how sigma_pre is obtained:
 
 from __future__ import annotations
 
-import warnings
-
 import flopscope as flops
 import flopscope.numpy as fnp
 from whestbench import BaseEstimator, SetupContext
 from whestbench.domain import MLP
-
-# The covariance path's post-ReLU update — gain[i]*gain[j]*cov_pre[i,j] —
-# is mathematically symmetric, but flopscope's static analysis cannot
-# prove that from the multiply alone. Silence the cosmetic warning so
-# the example's first-run output stays clean. See `flops.as_symmetric`
-# if you'd rather re-tag the result explicitly.
-warnings.filterwarnings("ignore", category=flops.SymmetryLossWarning)
 
 # ---------------------------------------------------------------------------
 # Mean propagation path  (diagonal variance only)
@@ -126,8 +117,14 @@ def _covariance_path(mlp: MLP) -> fnp.ndarray:
         # -- Linear layer --
         # Pre-activation mean:         mu_pre  = W^T mu
         # Pre-activation covariance:   cov_pre = W^T cov W
+        #
+        # Use einsum (not the chained matmul `w.T @ cov @ w`) so flopscope
+        # detects that the two `w` operands are the same tensor and tags
+        # cov_pre as symmetric. Symmetry then flows through the post-ReLU
+        # outer-product update, so no SymmetryLossWarning fires. See
+        # https://github.com/AIcrowd/whestbench/issues/27.
         mu_pre = w.T @ mu
-        cov_pre = w.T @ cov @ w
+        cov_pre = fnp.einsum("ij,ia,jb->ab", cov, w, w)
 
         var_pre = fnp.maximum(fnp.diag(cov_pre), 1e-12)
         sigma_pre = fnp.sqrt(var_pre)

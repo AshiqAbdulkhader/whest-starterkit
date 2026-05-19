@@ -186,10 +186,10 @@ The table below shows real scores from the four bundled example estimators, run 
 
 | Estimator | `adjusted_final_layer_score` | `final_layer_mse` | `all_layers_mse` | `mean_compute_utilization` | Approach |
 |---|---:|---:|---:|---:|---|
-| `01_random` | 5.6e-2 | 5.6e-1 | 4.2e-1 | 0.00015 | Uniform random values seeded from `mlp.seed`. The bundled [`estimator.py`](../../estimator.py) at the repo root is the true (all-zeros) baseline; running `uv run whest init <dir>` in a fresh directory produces the same template. |
-| `02_mean_propagation` | 7.7e-5 | 7.7e-4 | 4.3e-4 | 0.021 | Diagonal variance, O(depth × width²). ~700× better raw MSE than random. |
-| `03_covariance_propagation` | 3.7e-6 | 3.7e-5 | 1.8e-5 | 0.031 | Full covariance, O(depth × width³). ~20× better raw MSE than mean propagation. |
-| `04_combined` | 3.7e-6 | 3.7e-5 | 1.8e-5 | 0.030 | Routes to covariance when budget allows. At the default budget always routes to covariance — same numbers as `03`. |
+| `01_random` | 5.6e-2 | 5.6e-1 | 4.2e-1 | 0.00014 | Uniform random values seeded from `mlp.seed`. The bundled [`estimator.py`](../../estimator.py) at the repo root is the true (all-zeros) baseline; running `uv run whest init <dir>` in a fresh directory produces the same template. |
+| `02_mean_propagation` | 7.7e-5 | 7.7e-4 | 4.3e-4 | 0.024 | Diagonal variance, O(depth × width²). ~700× better raw MSE than random. |
+| `03_covariance_propagation` | 3.7e-6 | 3.7e-5 | 1.8e-5 | 0.027 | Full covariance, O(depth × width³). ~20× better raw MSE than mean propagation. The pre-activation covariance `W^T cov W` is computed with `fnp.einsum("ij,ia,jb->ab", cov, w, w)` so flopscope tags the result symmetric and prunes redundant work. |
+| `04_combined` | 3.7e-6 | 3.7e-5 | 1.8e-5 | 0.027 | Routes to covariance when budget allows. At the default budget always routes to covariance — same numbers as `03`. |
 
 **How to read these numbers:**
 

@@ -26,11 +26,36 @@ W = fnp.eye(4)
 v = fnp.ones(4)
 f = W @ v           # tracked: same as fnp.matmul(W, v)
 g = W.T @ v         # tracked: transpose is free, matmul is tracked
-h = W.T @ W @ v     # tracked: two matmuls, chained with @
 ```
 
 Use operators whenever they improve readability. The verbose `fnp.*` forms are still
 available but are no longer required for tracking purposes.
+
+### Avoid chained matmuls — they drop symmetry information
+
+flopscope tracks symmetry annotations on tensors. Operations that produce a
+mathematically-symmetric result will tag the output as symmetric **only if
+flopscope can prove it from the operands and the operation**. Chained
+matmuls (`A @ B @ C`) defeat this proof because each `matmul` runs in
+isolation — the intermediate `(A @ B)` is generally not symmetric, so the
+final `@ C` can't recover symmetry even when the full triple product
+mathematically is.
+
+The canonical example is the covariance update inside a linear layer:
+
+```python
+# Anti-pattern — flopscope cannot prove cov_pre is symmetric,
+# downstream multiplies emit SymmetryLossWarning:
+cov_pre = w.T @ cov @ w
+
+# Use einsum so flopscope sees both `w` operands are the same tensor
+# and tags cov_pre as symmetric. Symmetry then flows downstream:
+cov_pre = fnp.einsum("ij,ia,jb->ab", cov, w, w)
+```
+
+See `examples/03_covariance_propagation.py` for the full pattern in
+context, and [whestbench#27](https://github.com/AIcrowd/whestbench/issues/27)
+for the rationale.
 
 ## Operation costs
 

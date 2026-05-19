@@ -404,7 +404,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "whestbench", git = "https://github.com/AIcrowd/whestbench.git?rev=629d6b9dc0528bf0ed62dd1c99c25545d1071aed" }]
+requires-dist = [{ name = "whestbench", git = "https://github.com/AIcrowd/whestbench.git?rev=1ab3aed7bcd100512121a020b61307a7e016000c" }]
 
 [package.metadata.requires-dev]
 dev = [
@@ -415,7 +415,7 @@ dev = [
 [[package]]
 name = "whestbench"
 version = "0.2.0"
-source = { git = "https://github.com/AIcrowd/whestbench.git?rev=629d6b9dc0528bf0ed62dd1c99c25545d1071aed#629d6b9dc0528bf0ed62dd1c99c25545d1071aed" }
+source = { git = "https://github.com/AIcrowd/whestbench.git?rev=1ab3aed7bcd100512121a020b61307a7e016000c#1ab3aed7bcd100512121a020b61307a7e016000c" }
 dependencies = [
     { name = "flopscope" },
     { name = "plotext" },

@@ -9,159 +9,199 @@ Use this page to understand how the leaderboard score is computed from your esti
 ## Pipeline at a glance
 
 ```
-   ┌─────────────────────┐
-   │  random MLP_m       │   one of M MLPs (default M=10)
-   │  flop_budget        │
-   └──────────┬──────────┘
-              │
-              ▼
-   ┌─────────────────────────────────┐
-   │  your predict(mlp_m, budget)    │   runs inside flopscope.BudgetContext
-   │  (flopscope counts every op)    │
-   └──────────┬──────────────────────┘
-              │
-              ▼
-        flops_used > flop_budget ?
-         /                     \
-     yes /                       \ no
-        ▼                         ▼
-   ┌─────────────┐         ┌─────────────────────┐
-   │ pred_m :=   │         │ pred_m := your      │
-   │   zeros     │         │   returned array    │
-   └──────┬──────┘         └──────────┬──────────┘
-          │                           │
-          └────────────┬──────────────┘
-                       ▼
-          ┌─────────────────────────────────┐
-          │ truth_m  =  Monte-Carlo means   │
-          │ MSE_m    =  mean((pred_m -      │
-          │              truth_m)²)         │
-          └────────────┬────────────────────┘
-                       │
-            (repeat for every MLP)
-                       │
-                       ▼
-            ┌────────────────────────────────────┐
-            │ primary_score = mean over m of     │
-            │  the FINAL-LAYER MSE (length n)    │
-            │                                    │
-            │ secondary_score = mean over m of   │
-            │  the ALL-LAYER MSE (d × n cells)   │
-            └────────────────────────────────────┘
-
-                       lower is better
+   ┌─────────────────────────┐
+   │  random MLP_m           │   one of M MLPs (default M=10)
+   │  flop_budget B          │   default B = 6.8e10
+   │  mlp.seed (per-MLP RNG) │   grader-supplied; same value under regrade
+   └────────────┬────────────┘
+                │
+                ▼
+   ┌──────────────────────────────────────┐
+   │  your predict(mlp_m, budget)         │   runs inside flopscope.BudgetContext
+   │  (flopscope counts FLOPs analytically)│
+   └────────────┬─────────────────────────┘
+                │
+                ▼
+        failure path triggered?
+        (budget/time exhausted, raised,
+         wrong shape, non-finite, …)
+         /                       \
+     yes /                         \ no
+        ▼                           ▼
+   ┌──────────────┐          ┌────────────────────────┐
+   │ pred_m :=    │          │ pred_m := your         │
+   │   zeros      │          │   returned array       │
+   │ mult_m := 1.0│          │ mult_m := max(0.1,     │
+   │ (no discount)│          │   C_m / B)             │
+   └──────┬───────┘          └──────────┬─────────────┘
+          │                             │
+          └──────────────┬──────────────┘
+                         ▼
+         ┌─────────────────────────────────────────────┐
+         │ final_layer_mse_m  =  MSE(pred_m, truth_m)  │
+         │   (over the final layer's `width` cells)    │
+         │ s_m  =  final_layer_mse_m  ×  mult_m        │
+         └────────────────────────┬────────────────────┘
+                                  │
+                       (repeat for every MLP)
+                                  │
+                                  ▼
+         ┌──────────────────────────────────────────────────┐
+         │ adjusted_final_layer_score = mean over m of s_m  │
+         │   (the leaderboard metric — lower is better)     │
+         │                                                  │
+         │ final_layer_mse  = mean over m of                │
+         │                    final_layer_mse_m             │
+         │ all_layers_mse   = mean over m, all              │
+         │                    (depth × width) cells, of     │
+         │                    (pred − truth)²               │
+         │   (diagnostic aggregates — no budget multiplier) │
+         └──────────────────────────────────────────────────┘
 ```
 
 ## 📌 TL;DR
 
-- Lower score is better.
-- Score is pure MSE under a FLOP budget constraint.
-- If your estimator exceeds the FLOP budget, all predictions for that MLP are zeroed.
-- Your score is pure MSE — the closer to zero, the better.
+- **Leaderboard metric**: `adjusted_final_layer_score = mean_m( final_layer_mse_m × max(0.1, C_m / B) )`. Lower is better.
+- **Effective compute** `C_m = F_m + λ·R_m` (analytical FLOPs plus a residual-wall-time penalty at λ = 1e11 FLOPs/sec).
+- **Discount floor**: the `max(0.1, …)` floor caps the budget discount at 10× so an arbitrarily cheap-but-wrong submission cannot dominate the ranking.
+- **Failures** (budget bust, time bust, raised, wrong shape, non-finite) → predictions zeroed, multiplier forced to **1.0** (no compute discount). The suite mean stays finite; one bad MLP no longer poisons the run.
+- **Diagnostics**: `final_layer_mse` and `all_layers_mse` are the raw MSEs without budget adjustment — read them to tell *why* a score is where it is.
 
 ## The core idea
 
-The scoring model answers a specific question: **how accurately can your estimator predict expected neuron values within a fixed analytical compute budget?**
+The scoring model answers a specific question: **how accurately can your estimator predict expected neuron values, weighted by how much of the compute budget it actually used?**
 
-Each estimator call is given a `flop_budget` — a cap on the number of floating-point operations it may perform, tracked analytically by flopscope. If the estimator stays within budget, its predictions are scored by MSE against Monte Carlo ground truth. If it exceeds the budget, all predictions for that MLP are replaced with zeros.
+Two ingredients combine into the leaderboard score:
+
+1. **Accuracy** — mean squared error (MSE) between your predictions and Monte Carlo ground truth on the final layer.
+2. **Compute weight** — a multiplier in `[0.1, 1.0]` reflecting how much of the FLOP budget your estimator burned. Cheap-but-accurate methods get a discount, capped at 10× by the 0.1 floor.
+
+Failures (budget bust, time bust, exceptions, bad output) skip the discount entirely — you score against zeros at multiplier 1.0.
 
 ## How scoring works
 
-For the configured FLOP budget:
+For each of the M MLPs in the suite:
 
-1. **Your estimator runs.** Your `predict(mlp, budget)` is called. flopscope tracks all FLOP usage analytically — no wall-clock measurement.
-2. **Budget is checked.** If the total FLOPs used exceed `flop_budget`, all predictions for this MLP are replaced with zero vectors.
-3. **Accuracy is measured.** Per-depth mean squared error (MSE) between your predictions and Monte Carlo ground truth is computed.
-4. **Score is MSE.** Your score is pure MSE — the closer to zero, the better.
+1. **Your estimator runs.** `predict(mlp_m, budget)` is called inside a `flopscope.BudgetContext`. flopscope tracks all FLOP usage analytically.
+2. **Effective compute is computed.** `C_m = F_m + λ·R_m` where `F_m` is the analytical FLOP count (`flops_used`) and `R_m` is the residual wall-time bucket (`residual_wall_time_s` — time NOT inside flopscope kernels). `λ = 1e11` FLOPs/sec.
+3. **Multiplier is set.** If `C_m > B` (any of the failure paths fires), predictions are zeroed and `mult_m = 1.0`. Otherwise `mult_m = max(0.1, C_m / B)`.
+4. **Per-MLP score.** `s_m = final_layer_mse_m × mult_m`.
+5. **Suite mean.** `adjusted_final_layer_score = mean over m of s_m` — the leaderboard metric.
 
-Final score is the MSE averaged across MLPs (zeroed where budget was exceeded).
+`final_layer_mse` and `all_layers_mse` are reported alongside the leaderboard metric as **diagnostic aggregates** (no budget multiplier applied) so you can see whether a high `adjusted_final_layer_score` is driven by accuracy, by compute use, or by failures.
 
 ## The formula
 
-Two headline metrics. Both are means of squared errors; they differ only in
-which cells they average over. **Lower is better** for each.
+The leaderboard metric is the **suite mean** of per-MLP budget-adjusted scores:
 
 ```
-                   1   M    1   n
-primary_score   = ─── ∑   ─── ∑  ( pred_m[d-1, i] − truth_m[d-1, i] )²
-                   M  m=1   n  i=1
-                            └──────── final-layer cells only ────────┘
+                              1   M
+adjusted_final_layer_score = ─── ∑   s_m          ← lower is better
+                              M  m=1
 
-                   1   M    1     d-1   n
-secondary_score = ─── ∑   ─── ∑     ∑   ( pred_m[k, i] − truth_m[k, i] )²
-                   M  m=1  d·n k=0   i=1
-                            └────── all (depth × width) cells ───────┘
 
-  M       = number of MLPs in the suite (default 10; --n-mlps overrides)
-  d       = mlp.depth, n = mlp.width
-  pred_m  = (depth, width) array your predict() returned for MLP m
-  truth_m = Monte-Carlo ground-truth means for MLP m
-            (replaced with zeros if your call exceeded flop_budget)
+s_m = final_layer_mse_m × max(0.1, C_m / B)        (valid runs)
+s_m = final_layer_mse_m × 1.0                      (failures — no compute discount)
+
+C_m = F_m + λ·R_m                                  (effective compute)
+λ   = 1e11 FLOPs/sec                               (residual-wall-time conversion rate)
+
+final_layer_mse_m = mean over the `width` cells of MLP m's FINAL layer
+                    of (pred − truth)²
+
+  M  = number of MLPs in the suite (default 10; --n-mlps overrides)
+  B  = flop_budget (default 6.8e10; --flop-budget overrides)
+  F_m = flops_used by your predict() for MLP m (analytical, via flopscope)
+  R_m = residual_wall_time_s for MLP m (time NOT in flopscope kernels)
 ```
 
-`primary_score` is what the leaderboard ranks on. `secondary_score` is
-useful for diagnosing whether your error concentrates in the final layer
-or accumulates earlier — see also `best_mlp_score` and `worst_mlp_score`
-in the [score report](../reference/score-report-fields.md).
+`adjusted_final_layer_score` is what the leaderboard ranks on. Two diagnostic aggregates accompany it without budget adjustment: `final_layer_mse` (suite mean of `final_layer_mse_m`) and `all_layers_mse` (suite mean over **all** `(depth × width)` cells, not just the final layer). The per-MLP range is reported as `best_mlp_adjusted_final_layer_score` / `worst_mlp_adjusted_final_layer_score` (the min and max of `s_m` across the suite). Full schema in [score report fields](../reference/score-report-fields.md).
 
 ## Budget behavior
 
 Your estimator receives a `budget` argument (the FLOP budget). You may use it to route between cheap and expensive algorithms — the combined estimator example does this. But you are not required to. Fixed-strategy estimators that always use the same approach work fine, as long as they stay within budget.
 
-## Budget enforcement rules
+## Budget enforcement and failure handling
 
-flopscope enforces the FLOP budget analytically:
+flopscope enforces the FLOP budget analytically; the scoring layer applies the multiplier and routes failures:
 
-- **Exceeded budget.** If your estimator's total FLOPs exceed `flop_budget`, **all** predictions for that MLP are replaced with zeros. This is a hard cutoff, not per-depth.
-- **Under budget.** Predictions are used as-is. There is no bonus for using fewer FLOPs than the cap — accuracy is what matters.
-- **No floor or clamping.** Predictions are scored as-is — there is no minimum fraction or penalty floor.
+- **Within budget, normal run.** Predictions are scored as-is, multiplied by `max(0.1, C_m / B)`. If `C_m / B ≤ 0.1` (you used ≤10% of effective compute), the multiplier is pinned at the **0.1 floor** — a factor-of-ten discount and no more. If `C_m / B = 1.0` (you used the full budget), the multiplier is 1.0 (no discount).
+- **Exceeded FLOP budget.** flopscope raises `BudgetExhaustedError`; predictions are replaced with zeros, the multiplier is forced to **1.0** (no compute discount), and `budget_exhausted: true` is recorded.
+- **Combined-budget post-check.** Even if flopscope didn't fire, the scoring layer checks `C_m > B` post-hoc using `effective_compute`. Same outcome: zeros, multiplier 1.0, `combined_budget_exhausted: true`.
+- **Exceeded wall-time cap** (`wall_time_limit_s`, default 60 s) → same.
+- **Exceeded residual-wall-time cap** (`residual_wall_time_limit_s`, optional) → same.
+- **`predict()` raised** (any exception, including `MemoryError`, `ValueError`, …) → same; `error`, `error_code`, `traceback` recorded.
+- **Wrong shape** (not `(depth, width)`) or **non-finite values** → same.
+
+The "no compute discount on failure" rule means a **failed** MLP always scores `final_layer_mse_m × 1.0`, strictly worse than a trivial-zero submission that succeeds (which gets the 0.1 floor multiplier). The suite mean stays finite — one failed MLP no longer poisons the whole submission.
+
+See [failure breakdown in the score report](../reference/score-report-fields.md) for the `n_failed_mlps`, `failure_breakdown`, and per-MLP error fields.
 
 ## What a good score looks like
 
-A score near zero means your predictions are highly accurate for those MLPs. A score well above zero means prediction error is high — either because your method is inaccurate, or because it exceeded the FLOP cap and was zeroed.
+A score near zero means your predictions are highly accurate and (typically) you are using a reasonable fraction of the compute budget. A score well above zero means either your accuracy is poor (high `final_layer_mse`) or your submission failed on some MLPs (multiplier forced to 1.0 with predictions zeroed). Read the diagnostics:
 
-Scores below what sampling would achieve at that budget indicate your structural approach is genuinely better than brute-force Monte Carlo. That is the research milestone this challenge targets.
+- High `final_layer_mse` with low `mean_compute_utilization`: your method is fast but inaccurate — bigger compute would help.
+- High `final_layer_mse` with high `mean_compute_utilization`: your method is expensive and inaccurate — re-design.
+- Low `final_layer_mse` but high `adjusted_final_layer_score`: you're hitting the multiplier floor and need to spend more compute *or* you have failed MLPs (check `n_failed_mlps` and `failure_breakdown`).
+
+Scores below what brute-force Monte Carlo sampling achieves at the same budget indicate your structural approach is genuinely better than sampling. That is the research milestone this challenge targets.
 
 ## Practical tuning intuition
 
-- Start with a safe method that consistently emits valid rows and stays within budget.
-- Use `flop_budget` to gate whether to run more expensive methods.
+- Start with a safe method that consistently emits valid rows and stays within budget — the failure path is harsh (multiplier 1.0).
+- Use `flop_budget` to gate whether to run more expensive methods. The `combined_estimator` example does this.
 - Tune switching behavior using local reports across budgets.
-- Compare `final_mse` and `all_layer_mse` in your reports to diagnose which depths are hurting your score.
+- Compare `final_layer_mse` and `all_layers_mse` in your reports to diagnose which depths are hurting your score.
+- Watch `mean_compute_utilization` and `mean_score_multiplier` — if both are low (e.g. ≤0.1), you are hitting the multiplier floor and can spend more compute "for free" up to the budget.
 - Use [evaluation datasets](../how-to/use-evaluation-datasets.md) to fix networks and ground truth across runs — this makes score comparisons meaningful and skips repeated sampling.
 
 ## Worked example
 
-Suppose ground truth for a 3-neuron final layer is `[0.42, 0.38, 0.51]` and your estimator predicts `[0.40, 0.35, 0.55]`.
+Suppose ground truth for an MLP's 3-neuron final layer is `[0.42, 0.38, 0.51]` and your estimator predicts `[0.40, 0.35, 0.55]`.
 
-    final_mse = mean([(0.40 - 0.42)^2, (0.35 - 0.38)^2, (0.55 - 0.51)^2])
-              = mean([0.0004, 0.0009, 0.0016])
-              = (0.0004 + 0.0009 + 0.0016) / 3
-              = 0.000967
+    final_layer_mse_m = mean([(0.40 - 0.42)^2, (0.35 - 0.38)^2, (0.55 - 0.51)^2])
+                      = mean([0.0004, 0.0009, 0.0016])
+                      = 0.000967
 
-That `0.000967` is this MLP's per-MLP `final_mse`. The leaderboard `primary_score` is the **mean of per-MLP `final_mse` values across all MLPs** in the evaluation — a mean of means, not a sum.
+That `0.000967` is this MLP's per-MLP `final_layer_mse_m`. Now apply the budget multiplier. Suppose `flop_budget = 6.8e10`, you used `flops_used = 1.34e8`, and `residual_wall_time_s = 0.48 s` (so `λ·R_m = 1e11 × 0.48 = 4.8e10`):
+
+    C_m   = flops_used + λ·residual_wall_time_s
+          = 1.34e8 + 4.8e10
+          = 4.814e10                       ≈ 70.8% of budget
+
+    mult_m = max(0.1, C_m / B) = max(0.1, 0.708) = 0.708
+
+    s_m   = final_layer_mse_m × mult_m
+          = 0.000967 × 0.708
+          = 0.000684                       ← this MLP's contribution
+
+The leaderboard `adjusted_final_layer_score` is the **mean of `s_m` values across all MLPs** — a mean of budget-adjusted per-MLP scores, not a mean of raw MSEs.
+
+If your residual wall time were much larger (say 5s of Python looping), `λ·R_m` would dominate, `C_m` could exceed `B`, and the **combined-budget post-check** would zero this MLP's predictions and force `mult_m = 1.0` — see [Budget enforcement and failure handling](#budget-enforcement-and-failure-handling).
 
 ## Example estimator benchmarks
 
-The table below shows real scores from the four bundled example estimators, run with default settings (width=100, depth=16, 10 MLPs, 100M FLOP budget). Use these as calibration points for your own estimator.
+The table below shows real scores from the four bundled example estimators, run with default settings (`width=256`, `depth=8`, `n_mlps=10`, `flop_budget=6.8e10`, `--seed 42`). Use these as calibration points for your own estimator.
 
-| Estimator | Final MSE | All-Layer MSE | Approach |
-|-----------|-----------|---------------|----------|
-| `random_estimator` | ~0.50 | ~0.48 | Returns random values — the interface walkthrough. The bundled [`estimator.py`](../../estimator.py) at the repo root is the true (all-zeros) baseline; running `uv run whest init <dir>` in a fresh directory produces the same template. |
-| `mean_propagation` | ~0.004 | ~0.002 | Diagonal variance, O(depth x width^2). ~100x better than baseline. |
-| `covariance_propagation` | ~0.0003 | ~0.0002 | Full covariance, O(depth x width^3). ~1000x better than baseline. |
-| `combined_estimator` | ~0.0002 | ~0.0002 | Routes to covariance when budget allows, otherwise mean propagation. |
+| Estimator | `adjusted_final_layer_score` | `final_layer_mse` | `all_layers_mse` | `mean_compute_utilization` | Approach |
+|---|---:|---:|---:|---:|---|
+| `01_random` | 5.6e-2 | 5.6e-1 | 4.2e-1 | 3.5e-5 | Uniform random values seeded from `mlp.seed`. The bundled [`estimator.py`](../../estimator.py) at the repo root is the true (all-zeros) baseline; running `uv run whest init <dir>` in a fresh directory produces the same template. |
+| `02_mean_propagation` | 7.7e-5 | 7.7e-4 | 4.3e-4 | 0.0048 | Diagonal variance, O(depth × width²). ~700× better raw MSE than random. |
+| `03_covariance_propagation` | 3.7e-6 | 3.7e-5 | 1.8e-5 | 0.0067 | Full covariance, O(depth × width³). ~20× better raw MSE than mean propagation. The pre-activation covariance `W^T cov W` is computed with `fnp.einsum("ij,ia,jb->ab", cov, w, w)` so flopscope tags the result symmetric and prunes redundant work. |
+| `04_combined` | 3.7e-6 | 3.7e-5 | 1.8e-5 | 0.0067 | Routes to covariance when budget allows. At the default budget always routes to covariance — same numbers as `03`. |
 
 **How to read these numbers:**
 
-- The **random estimator** (zeros) gives you the "doing nothing" baseline. Its MSE reflects the natural scale of the ground truth activations.
-- **Mean propagation** is ~100x more accurate than zeros — a huge improvement from a simple analytical formula with negligible FLOP cost.
-- **Covariance propagation** is another ~10x better, but costs O(width^3) per layer. At width=100, this is affordable; at width=1000, it would exhaust the budget.
-- The **combined estimator** gets the best of both worlds by checking the budget before deciding which algorithm to run.
+- The **0.1 multiplier floor is active for every baseline at the default budget.** All four baselines use under 1% of the effective compute, so `mean_score_multiplier` is pinned at `0.1` and `adjusted_final_layer_score = final_layer_mse × 0.1` across the board. To beat the floor you need an estimator that spends meaningfully more effective compute — see [Algorithm Ideas](../how-to/algorithm-ideas.md) for budget-aware approaches.
+- **Random baseline** reflects the natural scale of the ground truth activations. Its raw `final_layer_mse ≈ 0.56` is what predicting random uniform values produces on the default ReLU MLP shape.
+- **Mean propagation** is ~700× more accurate than random — a huge improvement from a simple analytical formula with very low FLOP cost (~0.5% utilization).
+- **Covariance propagation** is another ~20× better, but costs O(width³) per layer. At width=256 this still uses only ~0.7% of the budget, so the multiplier floor still applies — the per-MLP score is `0.1 × final_layer_mse`.
+- **The combined estimator** routes to covariance whenever budget allows. At the default budget (6.8e10) and width=256, the routing threshold (30·width² = 1.97M) is always exceeded, so combined always picks covariance and the numbers are identical to `03`.
 
-To reproduce: `uv run whest run --estimator examples/<NN>_<name>.py --n-mlps 10` (e.g. `examples/02_mean_propagation.py`)
+To reproduce: `uv run whest run --estimator examples/<NN>_<name>.py --runner local --n-mlps 10 --seed 42` (e.g. `examples/02_mean_propagation.py`).
 
-Scores vary slightly between runs due to random MLP generation and Monte Carlo ground truth noise.
+Scores are reproducible with `--seed 42` (same seed → same MLPs → same `mlp.seed` per MLP → same predictions). Without `--seed`, scores vary slightly between runs due to random MLP generation and Monte Carlo ground truth noise.
 
 ## ➡️ Next step
 

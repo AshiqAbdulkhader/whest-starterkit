@@ -13,7 +13,7 @@ checks; each one maps to a single command or a one-line confirmation.
       green `Status: success` panel. (Catches: wrong shape, non-finite
       values, broken `setup()`.)
 - [ ] **`uv run whest run --estimator estimator.py --runner local --seed 42 --n-mlps 3`**
-      produces a `primary_score` you recognize.
+      produces an `adjusted_final_layer_score` you recognize.
 - [ ] **`uv run whest run --estimator estimator.py --runner subprocess --seed 42 --n-mlps 3`**
       produces a score within ~1% of the local-runner score above.
       (Catches: shared global state, RNG re-seed differences, imports
@@ -41,8 +41,16 @@ checks; each one maps to a single command or a one-line confirmation.
       grader can't see your laptop.
 - [ ] No network calls in `setup()` or `predict()`. The grader has no
       outbound network.
-- [ ] No time-based seeds (`time.time()`, `os.urandom`, …). Use
-      `numpy.random.default_rng(<fixed_int>)`.
+- [ ] No time-based seeds (`time.time()`, `os.urandom`, …) and no
+      participant-chosen seeds. If your estimator uses randomness inside
+      `predict()`, seed it from `mlp.seed`:
+      `fnp.random.default_rng(mlp.seed)`. If your estimator uses randomness
+      inside `setup()` (e.g. a fixed random projection basis), seed it from
+      `ctx.seed`: `fnp.random.default_rng(ctx.seed)`. Custom seeds at either
+      site may be disqualified for prize eligibility — see
+      [Estimator Contract: Reproducibility](../reference/estimator-contract.md#reproducibility-under-the-grader-seed).
+      Do **not** call `fnp.random.seed(...)` — use `default_rng(...)` for an
+      isolated `Generator`.
 
 ## Sanity
 

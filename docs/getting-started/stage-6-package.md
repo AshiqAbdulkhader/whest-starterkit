@@ -39,8 +39,8 @@ What happens once you upload `submission.tar.gz`:
    failed submission with the traceback surfaced in the AIcrowd UI.
 4. **`predict()` is called per MLP.** Errors per call are captured but
    don't kill the run — predictions for that MLP are scored against
-   zeros. Repeated failures will tank `primary_score`.
-5. **The leaderboard updates** with `primary_score` once the run
+   zeros. Repeated failures will tank `adjusted_final_layer_score`.
+5. **The leaderboard updates** with `adjusted_final_layer_score` once the run
    finishes.
 
 If the leaderboard score disagrees with your Stage 4 score by more than

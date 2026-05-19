@@ -58,7 +58,7 @@ The template estimator returns all zeros. Run it to see what a bad score looks l
 uv run whest run --estimator estimator.py --n-mlps 3
 ```
 
-Look at `primary_score` — this is the MSE of predicting all zeros. It is your floor.
+Look at `adjusted_final_layer_score` — the zeros template burns negligible compute, so the multiplier hits the 0.1 floor and the score is `0.1 × final_layer_mse`. The raw `final_layer_mse` reflects the natural scale of the ReLU activations. This is your floor.
 
 ### Step 2: Mean propagation
 
@@ -69,14 +69,16 @@ cp examples/02_mean_propagation.py estimator.py
 uv run whest run --estimator estimator.py --n-mlps 3
 ```
 
-Compare `primary_score` to the zeros baseline. Mean propagation uses the network's weights to make informed predictions, so it should score significantly better.
+Compare `adjusted_final_layer_score` to the zeros baseline. Mean propagation uses the network's weights to make informed predictions, so it should score significantly better.
 
 ### Step 3: Understand the score report
 
 The report shows per-MLP results:
-- `final_mse`: your accuracy on the final layer (primary ranking metric)
-- `flops_used`: how many FLOPs your estimator consumed
-- `budget_exhausted`: whether you exceeded the budget (predictions zeroed if true)
+- `final_layer_mse`: raw accuracy on the final layer (no budget multiplier — diagnostic).
+- `adjusted_final_layer_score`: per-MLP score `final_layer_mse × max(0.1, effective_compute / flop_budget)`. The suite mean is the leaderboard metric.
+- `effective_compute`: `flops_used + λ · residual_wall_time_s` with `λ = 1e11` FLOPs/sec.
+- `flops_used`: analytical FLOP count from flopscope.
+- `budget_exhausted`, `time_exhausted`, `residual_wall_time_exhausted`, `combined_budget_exhausted`: failure flags. Any `true` means predictions zeroed and multiplier forced to 1.0 (no compute discount).
 
 ### Step 4: Try the combined estimator
 
@@ -88,6 +90,40 @@ uv run whest run --estimator estimator.py --n-mlps 3
 ```
 
 This demonstrates the budget-aware routing pattern — a common design for production estimators.
+
+### Step 5: Seed randomness from the grader-supplied seeds
+
+The grader supplies two independent seeds; use the right one for the right scope.
+
+**Predict-time randomness** (Monte Carlo sampling, random projections, randomized hashing inside `predict()`) — seed from `mlp.seed`. The grader supplies a fixed per-MLP seed identical across all submissions for a given MLP. **Submissions that use unseeded randomness or their own per-MLP seeds are not guaranteed to reproduce under regrade and may be disqualified for prize eligibility.**
+
+```python
+import flopscope.numpy as fnp
+
+def predict(self, mlp, budget):
+    rng = fnp.random.default_rng(mlp.seed)
+    samples = rng.standard_normal((100, mlp.width))
+    # ... use rng for any further internal randomness
+```
+
+**Setup-time randomness** (sampling a random projection basis, jittering initial weights, choosing random hyperparameters in `setup()`) — seed from `ctx.seed`. The grader passes `--seed` and the same value reaches every estimator's `setup(ctx)` via `ctx.seed`. Local runs can pass `--seed` to reproduce.
+
+```python
+import flopscope.numpy as fnp
+from whestbench import BaseEstimator, SetupContext
+
+class Estimator(BaseEstimator):
+    def setup(self, ctx: SetupContext) -> None:
+        self.setup_rng = fnp.random.default_rng(ctx.seed)
+        # one-time random precompute — e.g. a (width, k) random projection
+        self.projection = self.setup_rng.standard_normal((ctx.width, 64))
+```
+
+Do **not** call `fnp.random.seed(ctx.seed)` (or `np.random.seed(ctx.seed)`) — that mutates the process-global RNG and breaks composability with other libraries. Use `fnp.random.default_rng(ctx.seed)` to get an isolated `Generator`.
+
+For deterministic estimators (mean propagation, covariance propagation, the zeros baseline), both `mlp.seed` and `ctx.seed` are irrelevant — you can ignore them. The `examples/01_random.py` walkthrough demonstrates the seeded pattern actively; `examples/02_*`, `03_*`, and `04_*` carry the scaffold without consuming it, so the pattern is visible whichever example you copy.
+
+`ctx.seed` and `mlp.seed` are independent: with `--dataset`, the dataset supplies `mlp.seed` values (baked at the dataset's own seed) while `--seed` controls `ctx.seed` only. See [Estimator Contract: Reproducibility](../reference/estimator-contract.md#reproducibility-under-the-grader-seed) for the full contract requirement.
 
 ---
 

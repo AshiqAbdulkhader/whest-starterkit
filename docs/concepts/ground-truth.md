@@ -21,7 +21,7 @@ Because ground truth is estimated by sampling, it has finite precision. With k s
 
     standard_error ≈ sigma / sqrt(k)
 
-For typical networks (width=100, depth=16), with 10,000 samples, ground truth means have standard errors around 0.005–0.01. Your MSE will never reach exactly zero because the target itself is approximate.
+For typical networks (width=256, depth=8) with 10,000 samples, ground truth means have standard errors around 0.005–0.01. Your MSE will never reach exactly zero because the target itself is approximate.
 
 ## What this means for your estimator
 

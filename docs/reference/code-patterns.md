@@ -26,11 +26,36 @@ W = fnp.eye(4)
 v = fnp.ones(4)
 f = W @ v           # tracked: same as fnp.matmul(W, v)
 g = W.T @ v         # tracked: transpose is free, matmul is tracked
-h = W.T @ W @ v     # tracked: two matmuls, chained with @
 ```
 
 Use operators whenever they improve readability. The verbose `fnp.*` forms are still
 available but are no longer required for tracking purposes.
+
+### Avoid chained matmuls — they drop symmetry information
+
+flopscope tracks symmetry annotations on tensors. Operations that produce a
+mathematically-symmetric result will tag the output as symmetric **only if
+flopscope can prove it from the operands and the operation**. Chained
+matmuls (`A @ B @ C`) defeat this proof because each `matmul` runs in
+isolation — the intermediate `(A @ B)` is generally not symmetric, so the
+final `@ C` can't recover symmetry even when the full triple product
+mathematically is.
+
+The canonical example is the covariance update inside a linear layer:
+
+```python
+# Anti-pattern — flopscope cannot prove cov_pre is symmetric,
+# downstream multiplies emit SymmetryLossWarning:
+cov_pre = w.T @ cov @ w
+
+# Use einsum so flopscope sees both `w` operands are the same tensor
+# and tags cov_pre as symmetric. Symmetry then flows downstream:
+cov_pre = fnp.einsum("ij,ia,jb->ab", cov, w, w)
+```
+
+See `examples/03_covariance_propagation.py` for the full pattern in
+context, and [whestbench#27](https://github.com/AIcrowd/whestbench/issues/27)
+for the rationale.
 
 ## Operation costs
 
@@ -61,6 +86,48 @@ available but are no longer required for tracking purposes.
 | Index/slice | `x[0]`, `x[:, 3]` | 0 | Free |
 
 ## Common patterns
+
+### Seed randomness from `mlp.seed` and `ctx.seed`
+
+The grader supplies two independent seeds: `mlp.seed` for per-MLP randomness inside `predict()`, and `ctx.seed` for one-time randomness inside `setup()`. Use them for any RNG inside your estimator.
+
+**Predict-time** (per-MLP randomness):
+
+```python
+import flopscope.numpy as fnp
+
+def predict(self, mlp, budget):
+    rng = fnp.random.default_rng(mlp.seed)
+    samples = rng.standard_normal((n_samples, mlp.width))
+    ...
+```
+
+For multiple independent RNG streams within one `predict()` call, spawn sub-generators from the per-MLP root rather than choosing your own seeds:
+
+```python
+master = fnp.random.default_rng(mlp.seed)
+sub_a, sub_b, sub_c = (
+    fnp.random.default_rng(s)
+    for s in master.bit_generator.spawn(3)
+)
+```
+
+**Setup-time** (run-level randomness, e.g. fixed random projections):
+
+```python
+import flopscope.numpy as fnp
+from whestbench import BaseEstimator, SetupContext
+
+class Estimator(BaseEstimator):
+    def setup(self, ctx: SetupContext) -> None:
+        self.setup_rng = fnp.random.default_rng(ctx.seed)
+        # one-time precompute, e.g. a (width, k) random projection basis
+        self.projection = self.setup_rng.standard_normal((ctx.width, 64))
+```
+
+Do **not** call `fnp.random.seed(ctx.seed)` — that mutates the process-global RNG. Always use `fnp.random.default_rng(...)` for an isolated `Generator`.
+
+Participant-chosen seeds (e.g. `fnp.random.default_rng(42)` inside `predict()` or `setup()`) may be disqualified for prize eligibility — see [Estimator Contract: Reproducibility](./estimator-contract.md#reproducibility-under-the-grader-seed).
 
 ### Standard normal PDF and CDF (built-in)
 
@@ -158,7 +225,7 @@ fit for moderate widths). The approximation degrades when:
 - **Activations cluster near zero.** When `α ≈ 0`, the rectified-Gaussian
   approximation is accurate, but `µ` is small and relative errors spike.
 
-If your `final_mse` is fine but `all_layer_mse` blows up, this assumption
+If your `final_layer_mse` is fine but `all_layers_mse` blows up, this assumption
 is usually the culprit. See [algorithm-ideas.md](../how-to/algorithm-ideas.md)
 for advanced moment-matching strategies.
 

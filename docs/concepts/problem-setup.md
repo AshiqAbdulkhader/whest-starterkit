@@ -12,7 +12,7 @@ Use this page when you want a better understanding of the technical framing of t
 - Output: one `(n,)` prediction row per depth, for exactly `d` depths.
 - Goal: estimate expected neuron values under uniformly random inputs.
 - Predictions are real-valued expected neuron states, not probabilities.
-- Scoring is pure MSE under an analytical FLOP budget constraint — predictions are zeroed if the budget is exceeded.
+- Scoring is **budget-adjusted** final-layer MSE: `adjusted_final_layer_score = final_layer_mse × max(0.1, effective_compute / flop_budget)`. If the budget is exceeded (analytical FLOPs or `effective_compute = F_m + λ·R_m`), predictions are zeroed and the multiplier is forced to 1.0 (no compute discount).
 
 ## The research question
 
@@ -69,7 +69,7 @@ The simplest approach is **Monte Carlo sampling**:
 
 This is unbiased and converges as `k → ∞`, but the error decreases slowly (`≈ 1/√k`). The challenge asks: can you reach the same accuracy more efficiently by exploiting the network's structure?
 
-To estimate a width-100, depth-16 MLP to 1% accuracy, sampling needs roughly 10,000 forward passes at ~160K FLOPs each — about 1.6 billion FLOPs total. Mean propagation reaches similar accuracy for ~1.6 million FLOPs. That is a 1000x improvement.
+To estimate a width-256, depth-8 MLP to 1% accuracy, sampling needs roughly 10,000 forward passes at ~520K FLOPs each — about 5.2 billion FLOPs total. Mean propagation reaches similar accuracy for ~520K FLOPs (one O(depth × width²) propagation, no sampling at all). That is a ~10,000x improvement.
 
 ## What the estimator receives
 
@@ -84,7 +84,7 @@ Row `i` is your estimate of expected neuron values after layer `i`.
 
 ## Computational model
 
-All FLOP usage is tracked analytically by flopscope — there is no wall-clock timing. Your estimator imports flopscope (`import flopscope as flops` and `import flopscope.numpy as fnp`) and uses its primitives, which report exact FLOP counts. If the total exceeds `flop_budget`, all predictions for that MLP are zeroed.
+FLOP usage is tracked analytically by flopscope. Your estimator imports flopscope (`import flopscope as flops` and `import flopscope.numpy as fnp`) and uses its primitives, which report exact FLOP counts. The leaderboard ranks on **effective compute** `C_m = F_m + λ·R_m`, where `F_m` is analytical FLOPs and `R_m` is the residual wall-time bucket (Python-side work not inside a flopscope kernel) at `λ = 1e11` FLOPs/sec. If `C_m > flop_budget` (or wall-time / residual-wall-time caps trip), the affected MLP's predictions are zeroed and the budget multiplier is forced to 1.0. See [Scoring Model](./scoring-model.md) for the full formula.
 
 ## Ground truth
 

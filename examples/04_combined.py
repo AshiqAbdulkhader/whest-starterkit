@@ -30,19 +30,10 @@ The two paths differ only in how sigma_pre is obtained:
 
 from __future__ import annotations
 
-import warnings
-
 import flopscope as flops
 import flopscope.numpy as fnp
-from whestbench import BaseEstimator
+from whestbench import BaseEstimator, SetupContext
 from whestbench.domain import MLP
-
-# The covariance path's post-ReLU update — gain[i]*gain[j]*cov_pre[i,j] —
-# is mathematically symmetric, but flopscope's static analysis cannot
-# prove that from the multiply alone. Silence the cosmetic warning so
-# the example's first-run output stays clean. See `flops.as_symmetric`
-# if you'd rather re-tag the result explicitly.
-warnings.filterwarnings("ignore", category=flops.SymmetryLossWarning)
 
 # ---------------------------------------------------------------------------
 # Mean propagation path  (diagonal variance only)
@@ -126,8 +117,14 @@ def _covariance_path(mlp: MLP) -> fnp.ndarray:
         # -- Linear layer --
         # Pre-activation mean:         mu_pre  = W^T mu
         # Pre-activation covariance:   cov_pre = W^T cov W
+        #
+        # Use einsum (not the chained matmul `w.T @ cov @ w`) so flopscope
+        # detects that the two `w` operands are the same tensor and tags
+        # cov_pre as symmetric. Symmetry then flows through the post-ReLU
+        # outer-product update, so no SymmetryLossWarning fires. See
+        # https://github.com/AIcrowd/whestbench/issues/27.
         mu_pre = w.T @ mu
-        cov_pre = w.T @ cov @ w
+        cov_pre = fnp.einsum("ij,ia,jb->ab", cov, w, w)
 
         var_pre = fnp.maximum(fnp.diag(cov_pre), 1e-12)
         sigma_pre = fnp.sqrt(var_pre)
@@ -178,7 +175,23 @@ class Estimator(BaseEstimator):
     Decision rule:
         budget >= 30 * width^2  →  _covariance_path(mlp)
         budget <  30 * width^2  →  _mean_path(mlp)
+
+    Seeding (whestbench contract -- see
+    ``docs/reference/estimator-contract.md``): this estimator is deterministic
+    (both routed paths are analytical), but it carries the canonical seeding
+    scaffold so every bundled example shows the pattern. ``self._setup_rng``
+    is the submission-level RNG seeded from ``ctx.seed`` inside ``setup``;
+    the ``_rng`` line at the top of ``predict`` is the per-MLP RNG seeded
+    from ``mlp.seed``. Both are unused here.
     """
+
+    def __init__(self) -> None:
+        self._setup_rng = None  # set from ctx.seed inside setup()
+
+    def setup(self, ctx: SetupContext) -> None:
+        # Submission-level RNG; unused in this deterministic estimator but
+        # carried here so every example shows the pattern.
+        self._setup_rng = fnp.random.default_rng(ctx.seed)
 
     def predict(self, mlp: MLP, budget: int) -> fnp.ndarray:
         """Route to the appropriate algorithm based on available FLOP budget.
@@ -186,6 +199,11 @@ class Estimator(BaseEstimator):
         Returns an array of shape (depth, width) where row i is the predicted
         mean activation vector after the i-th ReLU layer.
         """
+        # Per-MLP RNG seeded from the grader's seed; unused here (deterministic
+        # algorithm) but carried so every example shows the pattern.
+        _rng = fnp.random.default_rng(mlp.seed)
+        _ = _rng  # silences "unused variable" linters
+
         if budget >= _COVARIANCE_FLOP_MULTIPLIER * mlp.width * mlp.width:
             return _covariance_path(mlp)
         return _mean_path(mlp)
@@ -198,5 +216,5 @@ if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from local_engine import build_mlp, compare_against_monte_carlo
 
-    mlp = build_mlp(width=32, depth=6, seed=0)
+    mlp = build_mlp(width=256, depth=8, seed=0)
     compare_against_monte_carlo(Estimator(), mlp)

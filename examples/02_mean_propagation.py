@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import flopscope as flops
 import flopscope.numpy as fnp
-from whestbench import BaseEstimator
+from whestbench import BaseEstimator, SetupContext
 from whestbench.domain import MLP
 
 
@@ -31,7 +31,24 @@ class Estimator(BaseEstimator):
 
     Propagates means through each layer using the analytical ReLU expectation
     formula with a diagonal variance approximation (assumes independent neurons).
+
+    Seeding (whestbench contract -- see
+    ``docs/reference/estimator-contract.md``): this estimator is deterministic,
+    but it carries the canonical seeding scaffold so every bundled example
+    shows the pattern. ``self._setup_rng`` is the submission-level RNG seeded
+    from ``ctx.seed`` inside ``setup``; the ``_rng`` line at the top of
+    ``predict`` is the per-MLP RNG seeded from ``mlp.seed``. Both are unused
+    here because the algorithm is purely analytical -- a randomized estimator
+    (e.g. Monte Carlo sampling, randomized projections) would consume them.
     """
+
+    def __init__(self) -> None:
+        self._setup_rng = None  # set from ctx.seed inside setup()
+
+    def setup(self, ctx: SetupContext) -> None:
+        # Submission-level RNG; unused in this deterministic estimator but
+        # carried here so every example shows the pattern.
+        self._setup_rng = fnp.random.default_rng(ctx.seed)
 
     def predict(self, mlp: MLP, budget: int) -> fnp.ndarray:
         """Predict per-layer output means via first-moment propagation.
@@ -39,6 +56,10 @@ class Estimator(BaseEstimator):
         Returns an array of shape (depth, width) where row i is the predicted
         mean activation vector after the i-th ReLU layer.
         """
+        # Per-MLP RNG seeded from the grader's seed; unused here (deterministic
+        # algorithm) but carried so every example shows the pattern.
+        _rng = fnp.random.default_rng(mlp.seed)
+        _ = _rng  # silences "unused variable" linters
         _ = budget  # budget is unused; this estimator has low FLOP cost
         width = mlp.width
 
@@ -94,5 +115,5 @@ if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from local_engine import build_mlp, compare_against_monte_carlo
 
-    mlp = build_mlp(width=32, depth=6, seed=0)
+    mlp = build_mlp(width=256, depth=8, seed=0)
     compare_against_monte_carlo(Estimator(), mlp)

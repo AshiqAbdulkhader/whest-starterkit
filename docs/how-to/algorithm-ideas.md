@@ -23,7 +23,7 @@ def predict_sampling(mlp, budget):
     return fnp.stack(rows, axis=0)
 ```
 
-**FLOP cost:** O(samples x depth x width^2). For width=100, depth=16, one sample costs ~160K FLOPs. 100 samples costs ~16M FLOPs.
+**FLOP cost:** O(samples x depth x width^2). For width=256, depth=8, one sample costs ~520K FLOPs. 100 samples costs ~52M FLOPs.
 
 **When to use:** As a baseline or sanity check. Accuracy improves as 1/sqrt(samples) — slow convergence.
 
@@ -31,7 +31,7 @@ def predict_sampling(mlp, budget):
 
 Track per-neuron means and variances through each layer using the ReLU expectation formula. Assumes neurons are independent (diagonal covariance).
 
-**FLOP cost:** O(depth x width^2) — one matrix-vector multiply per layer. For width=100, depth=16: ~1.6M FLOPs.
+**FLOP cost:** O(depth x width^2) — one matrix-vector multiply per layer. For width=256, depth=8: ~520K FLOPs.
 
 **When to use:** Default choice for most budgets. Fast and reasonably accurate for shallow-to-medium networks.
 
@@ -41,7 +41,7 @@ Track per-neuron means and variances through each layer using the ReLU expectati
 
 Track the full covariance matrix between neurons. More accurate because it captures correlations that diagonal methods ignore.
 
-**FLOP cost:** O(depth x width^3) — matrix-matrix multiply per layer. For width=100, depth=16: ~1.6B FLOPs. Much more expensive.
+**FLOP cost:** O(depth x width^3) — matrix-matrix multiply per layer. For width=256, depth=8: ~134M FLOPs. Much more expensive.
 
 **When to use:** When the FLOP budget is large relative to width^2, and accuracy matters more than speed. Best for narrow networks or shallow depths.
 
@@ -78,7 +78,7 @@ Reference: any low-rank Kalman filter / Ensemble Kalman filter intro.
 **Layer-adaptive routing.** Use full covariance for the first few layers
 (where correlations *build*) and switch to diagonal once the
 joint distribution looks roughly factored. Cost is the integral of the
-per-layer choice. Look at per-layer `all_layer_mse` from a
+per-layer choice. Look at per-layer `all_layers_mse` from a
 covariance-only baseline — the layer where the curve plateaus is your
 crossover point. The combined estimator above does this *across* MLPs
 based on budget; layer-adaptive does it *within* one estimator.

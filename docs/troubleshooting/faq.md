@@ -10,14 +10,22 @@ All computation must go through flopscope (`import flopscope as flops` and `impo
 
 Yes. scipy is not part of flopscope, so you import it separately as your own dependency. Common usage: `scipy.special.ndtr` for the standard normal CDF. Add `scipy` to your `requirements.txt` when packaging.
 
-## Why is my score `inf`?
+## Why is one MLP scoring much worse than the others?
 
-Either your estimator raised during `predict()`, returned invalid data (wrong shape, NaN, non-numeric), or exhausted the FLOP / wall-time budget. Since 2026-04, explicit predict errors surface through an "Estimator Errors" panel in the report and set exit code `1`; `inf` with exit `0` means budget or time exhaustion rather than a swallowed exception. Run with `--debug` to see the tracebacks:
+A per-MLP `adjusted_final_layer_score` that is much higher than the others almost always means that MLP **failed** — your estimator raised, exceeded the FLOP budget, exceeded the wall-time cap, returned the wrong shape, or returned non-finite values. WhestBench treats every failure as if your estimator had returned a zero array and forces the per-MLP multiplier to **1.0** (no compute discount). Concretely: `adjusted_final_layer_score_m = MSE(0, Y_m) × 1.0` for the failed MLP, which is strictly worse than a trivial-zero submission that succeeds (which gets the 0.1 multiplier floor).
+
+The suite mean stays finite — one failed MLP no longer poisons the whole run, but it does pull the mean noticeably toward the raw `final_layer_mse` of the zero prediction (`~0.5` at the default network shape).
+
+Diagnose by reading the failure flags on the failing per-MLP entry: `budget_exhausted`, `time_exhausted`, `residual_wall_time_exhausted`, `combined_budget_exhausted`, `error` / `error_code` / `traceback`. The suite-level `failure_breakdown` gives counts per flag, and `n_failed_mlps` is the total count of MLPs that hit any failure path.
+
+Run with `--debug` to see tracebacks; `--fail-fast` to halt at the first failure:
 
 ```bash
 whest run --estimator estimator.py --debug
 whest run --estimator estimator.py --debug --fail-fast   # halt at first error
 ```
+
+See [Estimator Contract: Failure semantics](../reference/estimator-contract.md#failure-semantics) for the complete list of failure paths.
 
 ## Do I need to use the `budget` argument in `predict()`?
 
@@ -60,7 +68,7 @@ configured `--residual-wall-time-limit`.
 
 ## What happens if I exceed the FLOP budget?
 
-flopscope raises `BudgetExhaustedError` before the over-budget operation executes. The framework catches this and zeros all your predictions for that MLP. You will see `budget_exhausted: true` in the per-MLP report.
+flopscope raises `BudgetExhaustedError` before the over-budget operation executes. The framework catches this, zeros all your predictions for that MLP, and forces the per-MLP multiplier to **1.0** (no compute discount). You will see `budget_exhausted: true` in the per-MLP report and `adjusted_final_layer_score_m = final_layer_mse_m × 1.0` for the affected MLP. There is also a **post-hoc** combined-budget check: even if flopscope didn't fire, the scoring layer checks `C_m = F_m + λ·R_m > flop_budget` after `predict()` returns and surfaces `combined_budget_exhausted: true` (same zero/×1.0 outcome).
 
 ## How do I inspect budget summaries while debugging?
 
@@ -78,11 +86,11 @@ No. flopscope counts FLOPs analytically based on tensor shapes — not wall-cloc
 
 ## How many MLP networks are in a full evaluation?
 
-The default evaluation scores your estimator on 10 MLPs (configured by `n_mlps` in `ContestSpec`). Each MLP has the same width and depth but different random weights. Your aggregate score is the mean MSE across all MLPs.
+The default evaluation scores your estimator on 10 MLPs (configured by `n_mlps` in `ContestSpec`). Each MLP has the same width and depth but different random weights and a distinct grader-supplied `mlp.seed` for any estimator-side randomness. Your aggregate score is the mean of the per-MLP `adjusted_final_layer_score` values.
 
 ## What if my estimator is fast but inaccurate?
 
-You are ranked by MSE, not by how few FLOPs you use. Using fewer FLOPs than the budget gives no bonus — only accuracy matters (as long as you stay within budget).
+You are ranked by the **budget-adjusted** `adjusted_final_layer_score = final_layer_mse × max(0.1, C_m / B)`, not raw MSE. Using less than 10% of the effective-compute budget gets you the 0.1 multiplier floor — a factor-of-ten discount and no more. So extremely cheap and inaccurate beats moderately cheap and inaccurate only up to that floor; below it, there is no further benefit to being cheaper.
 
 ## My local score is great but my submission scores 10x worse — why?
 

@@ -64,14 +64,17 @@ whest validate --estimator estimator.py
 
 ## FLOP budget exceeded
 
-Symptom: unexpectedly poor `primary_score` despite reasonable prediction logic.
+Symptom: unexpectedly poor `adjusted_final_layer_score` despite reasonable prediction logic, with one or more MLPs showing `budget_exhausted: true` or `combined_budget_exhausted: true`.
 
-Why it happens: your estimator exceeded the FLOP budget, causing all predictions for that MLP to be zeroed.
+Why it happens: your estimator's effective compute `C_m = F_m + λ·R_m` exceeded `flop_budget`. The affected MLP's predictions are replaced with zeros and the per-MLP multiplier is forced to **1.0** (no compute discount), so `adjusted_final_layer_score_m = MSE(0, Y_m) × 1.0` — strictly worse than a trivial-zero submission that succeeds (which gets the 0.1 multiplier floor).
+
+`budget_exhausted` fires when flopscope itself trips (your analytical FLOPs exceed the cap). `combined_budget_exhausted` fires on the post-hoc check `C_m > B` — flopscope didn't trip, but the residual-wall-time penalty (`λ · residual_wall_time_s` at `λ = 1e11` FLOPs/sec) pushed effective compute past the cap.
 
 Fix now:
 
-- check `flops_used` and `budget_exhausted` in the per-MLP report,
+- check `flops_used`, `effective_compute`, `residual_wall_time_s`, `budget_exhausted`, and `combined_budget_exhausted` in the per-MLP report,
 - reduce expensive operations (matmul dominates FLOP cost),
+- reduce Python-side overhead — tight loops over neurons add to `residual_wall_time_s` and thus to `effective_compute`,
 - consider diagonal approximations instead of full covariance,
 - see [Manage Your FLOP Budget](../how-to/manage-flop-budget.md) for optimization guidance.
 
@@ -127,7 +130,7 @@ whest validate --estimator estimator.py
 
 Symptom: `whest run` exits with status `1` and prints an "Estimator Errors" panel listing one or more MLPs with a `PREDICT_ERROR` code. A stderr line reads e.g. `2 of 10 MLP(s) raised during predict; rerun with --debug for tracebacks...`.
 
-Why it happens: your `predict()` raised an exception that is neither `BudgetExhaustedError` nor `TimeExhaustedError`. WhestBench still scores the remaining MLPs (producing `inf` for the failed ones) so you can see partial progress, but the non-zero exit code signals that the submission is not yet passing.
+Why it happens: your `predict()` raised an exception that is neither `BudgetExhaustedError` nor `TimeExhaustedError`. WhestBench routes the failure through the zero-prediction path — the affected MLP scores `final_layer_mse_m × 1.0` (no compute discount) and the suite mean stays finite. The non-zero exit code signals that the submission is not yet passing.
 
 Fix now:
 
@@ -231,16 +234,19 @@ Fix now: replace all `np.*` calls with `fnp.*` equivalents. See [Code Patterns](
 
 Verify: check `flops_used > 0` in score report.
 
-## Score is inf
+## Every MLP failed (n_failed_mlps == n_mlps)
 
-Symptom: `primary_score` shows as `inf`.
+Symptom: the suite-level `failure_breakdown` shows every MLP carrying at least one failure flag (`n_failed_mlps == n_mlps`), and the `adjusted_final_layer_score` is dominated by `MSE(0, Y_m) × 1.0` across the board (typically lands near `0.5`, the raw `final_layer_mse` of zero predictions at the default activation scale).
 
-Why it happens: every MLP either raised during `predict()` or exhausted the FLOP / time budget, so the mean of per-MLP MSEs is `inf`.
+> **Note:** this is the post-merge replacement for the older "score is `inf`" symptom. Since whestbench PR #39 (May 2026) failures produce finite scores at the zero-prediction × 1.0 multiplier — there is no longer an `inf` path.
 
-Tell them apart from the exit code and the report:
+Why it happens: every MLP either raised during `predict()` or exhausted the FLOP / wall-time / residual-wall-time / combined budget.
 
-- **Exit `1` + "Estimator Errors" panel** — `predict()` raised exceptions. See [Predict raised an unexpected exception](#predict-raised-an-unexpected-exception).
-- **Exit `0` + every `per_mlp[i].budget_exhausted: true`** — you ran out of FLOPs.
+Tell them apart from `failure_breakdown` and the exit code:
+
+- **Exit `1` + non-zero `failure_breakdown.error` + "Estimator Errors" panel** — `predict()` raised exceptions on at least one MLP. See [Predict raised an unexpected exception](#predict-raised-an-unexpected-exception).
+- **Exit `0` + every `per_mlp[i].budget_exhausted: true`** — you ran out of analytical FLOPs.
+- **Exit `0` + every `per_mlp[i].combined_budget_exhausted: true`** — your `effective_compute = F_m + λ·R_m` exceeded the cap (residual wall time pushed you over, even though flopscope didn't trip).
 - **Exit `0` + every `per_mlp[i].time_exhausted: true`** — you ran out of wall-clock time.
 
 Fix now: run with `--debug` to see tracebacks in the "Estimator Errors" panel (works with any runner), or `--fail-fast` to halt at the first failing MLP with the raw Python stack:

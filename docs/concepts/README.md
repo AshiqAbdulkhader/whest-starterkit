@@ -7,7 +7,7 @@ Background reading. These three docs explain the problem framing, the scoring me
 | Doc | What it covers |
 |---|---|
 | [problem-setup.md](problem-setup.md) | The MLP architecture, He initialization, and the research framing — why "competing with sampling" is the milestone this challenge targets. Includes a "Further reading" pointer to the relevant ARC posts and papers. |
-| [scoring-model.md](scoring-model.md) | How the leaderboard score is computed: ASCII pipeline diagram, explicit equation block for `primary_score` and `secondary_score`, behavior when the FLOP budget is exceeded, and a calibration table from the bundled examples. |
+| [scoring-model.md](scoring-model.md) | How the leaderboard score is computed: ASCII pipeline diagram, explicit equation block for `adjusted_final_layer_score` and `all_layers_mse`, behavior when the FLOP budget is exceeded, and a calibration table from the bundled examples. |
 | [ground-truth.md](ground-truth.md) | How the evaluator generates the reference values you're scored against — Monte-Carlo sampling, sample counts, the inherent noise floor. |
 
 Read in order if you want the full picture. **At minimum, skim `scoring-model.md`** — it's what drives every number you'll obsess over.

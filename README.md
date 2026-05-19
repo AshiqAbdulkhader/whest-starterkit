@@ -93,7 +93,7 @@ Past Stage 1, the documentation is organized into six sections — pick whicheve
 <summary>📖 <b><a href="docs/concepts/">Concepts</a></b> — Why this challenge exists, what's measured, how ground truth works</summary>
 
 - [Problem Setup](docs/concepts/problem-setup.md) — MLP architecture, He init, the research question, further reading.
-- [Scoring Model](docs/concepts/scoring-model.md) — Pipeline diagram, `primary_score` / `secondary_score` formulas, calibration table.
+- [Scoring Model](docs/concepts/scoring-model.md) — Pipeline diagram, `adjusted_final_layer_score` / `all_layers_mse` formulas, calibration table.
 - [Ground Truth](docs/concepts/ground-truth.md) — How the evaluator computes reference values via Monte Carlo.
 
 </details>

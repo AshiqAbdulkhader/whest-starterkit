@@ -47,8 +47,8 @@ if __name__ == "__main__":
         help="Compare your estimator against an example: 'random', 'mean_propagation', "
         "'covariance_propagation', or 'combined'.",
     )
-    parser.add_argument("--width", type=int, default=32)
-    parser.add_argument("--depth", type=int, default=6)
+    parser.add_argument("--width", type=int, default=256)
+    parser.add_argument("--depth", type=int, default=8)
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 

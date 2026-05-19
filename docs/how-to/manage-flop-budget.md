@@ -24,7 +24,7 @@ For the full flopscope API and cost model, see the [flopscope documentation](htt
 | **Matrix operations** | `fnp.matmul()`, `fnp.einsum()` | Depends on dimensions — typically dominates your budget |
 | **Random samplers** | `rng.standard_normal()`, `rng.uniform()` (where `rng = fnp.random.default_rng(seed)`); same for module-level `fnp.random.standard_normal()` etc. and `fnp.random.RandomState(seed)` | Calibrated per method (default ~16 FLOPs/element for `standard_normal`) |
 
-**Key insight:** `fnp.matmul` on `(n, n)` matrices costs `O(n^3)` FLOPs. For width-100 networks, a single matmul costs ~1M FLOPs. Most of your budget goes to matrix operations.
+**Key insight:** `fnp.matmul` on `(n, n)` matrices costs `O(n^3)` FLOPs. For width-256 networks, a single matmul costs ~17M FLOPs. Most of your budget goes to matrix operations.
 
 ## Check your budget usage
 
@@ -33,8 +33,8 @@ Wrap your estimator logic in a `BudgetContext` to see how many FLOPs it consumes
 ```python
 import flopscope as flops
 
-with flops.BudgetContext(flop_budget=100_000_000) as budget:
-    result = estimator.predict(mlp, budget=100_000_000)
+with flops.BudgetContext(flop_budget=68_000_000_000) as budget:
+    result = estimator.predict(mlp, budget=68_000_000_000)
 
 print(f"FLOPs used: {budget.flops_used:,}")
 print(f"FLOPs remaining: {budget.flops_remaining:,}")
@@ -45,10 +45,10 @@ If you also want a wall-clock guardrail while debugging locally, set
 
 ```python
 with flops.BudgetContext(
-    flop_budget=100_000_000,
+    flop_budget=68_000_000_000,
     wall_time_limit_s=2.0,
 ) as budget:
-    result = estimator.predict(mlp, budget=100_000_000)
+    result = estimator.predict(mlp, budget=68_000_000_000)
 ```
 
 ## Get a per-operation breakdown
@@ -60,8 +60,8 @@ consume the most FLOPs:
 ```python
 import flopscope as flops
 
-with flops.BudgetContext(flop_budget=100_000_000) as budget:
-    result = estimator.predict(mlp, budget=100_000_000)
+with flops.BudgetContext(flop_budget=68_000_000_000) as budget:
+    result = estimator.predict(mlp, budget=68_000_000_000)
     print(budget.summary())
 
 flops.budget_summary()
@@ -87,34 +87,36 @@ When you run your estimator with `whest run`, the per-MLP report includes:
 
 - **`flops_used`**: total FLOPs your estimator consumed for that MLP.
 - **`budget_exhausted`**: `true` if your estimator exceeded the FLOP budget — predictions were zeroed.
-- **`final_mse`** / **`all_layer_mse`**: your prediction accuracy (lower is better).
+- **`final_layer_mse`** / **`all_layers_mse`**: your prediction accuracy (lower is better).
 
 If `budget_exhausted` is `true`, your predictions were discarded. You need to reduce FLOP usage.
 
 ## Worked walkthrough: mean propagation, line by line
 
-The table below profiles [`examples/02_mean_propagation.py`](../../examples/02_mean_propagation.py) on the default Stage 1 MLP (`width=32, depth=6`). Numbers are aggregated across all 6 layers; per-layer cost is roughly the row total divided by 6. Reproduce with `flops.budget_summary()` after a single `predict()` call.
+The table below profiles [`examples/02_mean_propagation.py`](../../examples/02_mean_propagation.py) on the default Stage 1 MLP (`width=256, depth=8` — same shape as the Stage-3 grader). Numbers are aggregated across all 8 layers; per-layer cost is roughly the row total divided by 8. Reproduce with `ctx.summary()` inside a `flopscope.BudgetContext` after a single `predict()` call.
 
-| Operation in `predict()` | Calls | FLOPs (total) | % of budget |
+| Operation in `predict()` | Calls | FLOPs (total) | % of `predict()` total |
 |---|---:|---:|---:|
-| `mu_pre = w.T @ mu` and `var_pre = (w*w).T @ var` (`matmul`) | 12 | 393,216 | **96.2%** |
-| `mu_pre * Phi_alpha + sigma_pre * phi_alpha` etc. (`multiply`) | 48 | 7,488 | 1.8% |
-| `flops.stats.norm.pdf(alpha)` | 6 | 3,072 | 0.8% |
-| `flops.stats.norm.cdf(alpha)` | 6 | 3,072 | 0.8% |
-| `mu_pre * Phi_alpha + ...` etc. (`add`) | 18 | 576 | 0.1% |
-| `fnp.maximum(var_pre, 1e-12)` (`maximum`) | 12 | 384 | 0.1% |
-| `fnp.sqrt(var_pre)` | 6 | 192 | 0.0% |
-| `mu_pre / sigma_pre` (`true_divide`) | 6 | 192 | 0.0% |
-| `ez2 - mu*mu` (`subtract`) | 6 | 192 | 0.0% |
-| `fnp.stack(rows, axis=0)` | 1 | 192 | 0.0% |
-| **Total per `predict()`** | — | **408,576** | — |
+| `mu_pre = w.T @ mu` and `var_pre = (w*w).T @ var` (`matmul`) | 16 | 268,435,456 | **99.8%** |
+| `mu_pre * Phi_alpha + sigma_pre * phi_alpha` etc. (`multiply`) | 64 | 538,624 | 0.2% |
+| `flops.stats.norm.pdf(alpha)` | 8 | 32,768 | <0.1% |
+| `flops.stats.norm.cdf(alpha)` | 8 | 32,768 | <0.1% |
+| `mu_pre * Phi_alpha + ...` etc. (`add`) | 24 | 6,144 | <0.1% |
+| `fnp.maximum(var_pre, 1e-12)` (`maximum`) | 16 | 4,096 | <0.1% |
+| `fnp.sqrt(var_pre)` | 8 | 2,048 | <0.1% |
+| `mu_pre / sigma_pre` (`true_divide`) | 8 | 2,048 | <0.1% |
+| `ez2 - mu*mu` (`subtract`) | 8 | 2,048 | <0.1% |
+| `fnp.stack(rows, axis=0)` | 1 | 2,048 | <0.1% |
+| **Total per `predict()`** | — | **269,058,048** | — |
+
+The full ~269 M FLOPs spends only ~0.4% of the default 6.8e10 grader budget, so mean propagation lands well below the multiplier floor at this shape — see [Scoring Model](../concepts/scoring-model.md#example-estimator-benchmarks).
 
 Two takeaways:
 
-- **`matmul` dwarfs everything else.** 96% of the budget is two matmuls per layer. Halving the matmul count (e.g., switching to a diagonal-only formulation) buys you ~50% of the budget back.
+- **`matmul` dwarfs everything else.** 99.8% of `predict()` cost is two matmuls per layer. Halving the matmul count (e.g., switching to a diagonal-only formulation, or fusing into a single `einsum` like `examples/03_covariance_propagation.py` does for the symmetric cov-update) buys you most of that back.
 - **Reductions, sqrt, and divides are free in practice.** Don't twist your code to avoid them; the cost is in the tens of FLOPs per layer.
 
-The same pattern holds at production widths — only the absolute numbers change. Re-run the profile on `examples/03_*.py` to see the `O(width³)` matmul cost dominate even harder.
+The same pattern holds for `examples/03_covariance_propagation.py`, where the `O(width³)` symmetry-aware `einsum` lands at ~337 M FLOPs per `predict()` (~0.5% of the grader budget) — a few × more expensive than mean propagation, but still leaving plenty of headroom.
 
 ## Optimization tips
 

@@ -21,7 +21,7 @@ Same score format as Stage 3. If your score drops noticeably, you've found a bug
 
 ## ✅ Expected outcome
 
-Your Stage 4 `primary_score` should match Stage 3 within Monte-Carlo
+Your Stage 4 `adjusted_final_layer_score` should match Stage 3 within Monte-Carlo
 noise (a few percent at default `--n-samples`). Use `--seed N` to make
 both runs deterministic for an apples-to-apples comparison.
 

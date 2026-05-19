@@ -14,7 +14,7 @@ Typical report sections include:
 - `mode`
 - `run_meta`
 - `run_config`
-- `run_config.seed` (present when `whest run --seed` is provided)
+- `run_config.seed` (always present; `null` when `--seed` was omitted; the integer value passed to `--seed` otherwise). When set, this is also the value forwarded to `SetupContext.seed` for the estimator's `setup()` call. See [Estimator Contract: Reproducibility](./estimator-contract.md#reproducibility-under-the-grader-seed).
 - `run_config.dataset` (present when `--dataset` is used)
 - `results`
 

@@ -50,7 +50,14 @@ With the zeros template, the raw `final_layer_mse` and `all_layers_mse` hover ar
 
 ## Reproducing your own local runs
 
-`whest run --seed 42` fixes the suite root from which every `mlp.seed` is derived deterministically. Re-running with the same `--seed` produces identical MLPs, identical ground truth, and (for estimators that seed their internal randomness from `mlp.seed`) identical predictions and scores. The grader uses its own fixed suite seed for actual submission scoring — so the property that matters for you is **same `mlp.seed` ⇒ same predictions**. Test this locally by running twice with the same `--seed` and diffing the JSON reports.
+`whest run --seed 42` does two things:
+
+1. Fixes the suite root from which every `mlp.seed` is derived deterministically — same `--seed` → same MLPs and same per-MLP seeds.
+2. Sets `ctx.seed = 42` on the `SetupContext` passed to your `setup()` — same `--seed` → same setup-time RNG state.
+
+With `--dataset D --seed 42`, the dataset supplies `mlp.seed` values (baked at the dataset's own seed) and `--seed 42` controls `ctx.seed` only. `whest validate --estimator e.py --seed 42` is also accepted.
+
+For an estimator that seeds both predict-time (`mlp.seed`) and setup-time (`ctx.seed`) randomness, two runs at the same `--seed` produce byte-identical scores. The value is recorded in the JSON output under `run_config.seed` for audit purposes (`null` when `--seed` was omitted). Test reproducibility locally by running twice with the same `--seed` and diffing the JSON reports.
 
 ## FLOP-budget callout: Stage 1 vs Stage 3
 

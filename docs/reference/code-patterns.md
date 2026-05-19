@@ -62,9 +62,11 @@ available but are no longer required for tracking purposes.
 
 ## Common patterns
 
-### Seed randomness from `mlp.seed`
+### Seed randomness from `mlp.seed` and `ctx.seed`
 
-The grader supplies a fixed per-MLP seed via `mlp.seed`. Use it to seed any randomness inside `predict()`:
+The grader supplies two independent seeds: `mlp.seed` for per-MLP randomness inside `predict()`, and `ctx.seed` for one-time randomness inside `setup()`. Use them for any RNG inside your estimator.
+
+**Predict-time** (per-MLP randomness):
 
 ```python
 import flopscope.numpy as fnp
@@ -85,21 +87,22 @@ sub_a, sub_b, sub_c = (
 )
 ```
 
-For submission-level random precompute (random projections, fixed sampling patterns), use a hard-coded constant in `setup()` or `__init__` — `mlp.seed` is not available there:
+**Setup-time** (run-level randomness, e.g. fixed random projections):
 
 ```python
+import flopscope.numpy as fnp
+from whestbench import BaseEstimator, SetupContext
+
 class Estimator(BaseEstimator):
-    SETUP_SEED = 0xC0FFEE  # submission-level seed; constant across all MLPs
-
-    def __init__(self):
-        self._init_rng = fnp.random.default_rng(self.SETUP_SEED)
-
-    def setup(self, context):
-        # Precompute a (width, k) fixed random projection.
-        self.projection = self._init_rng.standard_normal((context.width, 64))
+    def setup(self, ctx: SetupContext) -> None:
+        self.setup_rng = fnp.random.default_rng(ctx.seed)
+        # one-time precompute, e.g. a (width, k) random projection basis
+        self.projection = self.setup_rng.standard_normal((ctx.width, 64))
 ```
 
-Participant-chosen per-MLP seeds (e.g. `fnp.random.default_rng(42)` inside `predict()`) may be disqualified for prize eligibility — see [Estimator Contract: Reproducibility](./estimator-contract.md#reproducibility-under-the-grader-seed).
+Do **not** call `fnp.random.seed(ctx.seed)` — that mutates the process-global RNG. Always use `fnp.random.default_rng(...)` for an isolated `Generator`.
+
+Participant-chosen seeds (e.g. `fnp.random.default_rng(42)` inside `predict()` or `setup()`) may be disqualified for prize eligibility — see [Estimator Contract: Reproducibility](./estimator-contract.md#reproducibility-under-the-grader-seed).
 
 ### Standard normal PDF and CDF (built-in)
 

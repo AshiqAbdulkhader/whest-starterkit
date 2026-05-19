@@ -91,9 +91,11 @@ uv run whest run --estimator estimator.py --n-mlps 3
 
 This demonstrates the budget-aware routing pattern — a common design for production estimators.
 
-### Step 5: Seed any randomness from `mlp.seed`
+### Step 5: Seed randomness from the grader-supplied seeds
 
-If your estimator uses randomness — Monte Carlo sampling, random projections, randomized hashing — seed it from `mlp.seed`. The grader supplies a fixed per-MLP seed; submissions that use unseeded randomness or their own per-MLP seeds are **not** guaranteed to reproduce under regrade and may be disqualified for prize eligibility.
+The grader supplies two independent seeds; use the right one for the right scope.
+
+**Predict-time randomness** (Monte Carlo sampling, random projections, randomized hashing inside `predict()`) — seed from `mlp.seed`. The grader supplies a fixed per-MLP seed identical across all submissions for a given MLP. **Submissions that use unseeded randomness or their own per-MLP seeds are not guaranteed to reproduce under regrade and may be disqualified for prize eligibility.**
 
 ```python
 import flopscope.numpy as fnp
@@ -104,11 +106,24 @@ def predict(self, mlp, budget):
     # ... use rng for any further internal randomness
 ```
 
-For deterministic estimators (mean propagation, covariance propagation, the zeros baseline), `mlp.seed` is irrelevant — you can ignore it. The `examples/01_random.py` walkthrough demonstrates the seeded pattern actively; `examples/02_*`, `03_*`, and `04_*` carry the scaffold without consuming it, so the pattern is visible whichever example you copy.
+**Setup-time randomness** (sampling a random projection basis, jittering initial weights, choosing random hyperparameters in `setup()`) — seed from `ctx.seed`. The grader passes `--seed` and the same value reaches every estimator's `setup(ctx)` via `ctx.seed`. Local runs can pass `--seed` to reproduce.
 
-If you need submission-level random precompute (e.g. a fixed random projection matrix), do it in `setup()` (or `__init__`) using a hard-coded constant — `mlp.seed` is not yet available there. Every bundled example uses a class-level `SETUP_SEED = 0xC0FFEE` for this purpose. The resulting precompute is identical across MLPs and across regrades, which is the right behavior for "compute once, reuse" patterns.
+```python
+import flopscope.numpy as fnp
+from whestbench import BaseEstimator, SetupContext
 
-See [Estimator Contract: Reproducibility](../reference/estimator-contract.md#reproducibility-under-the-grader-seed) for the full contract requirement.
+class Estimator(BaseEstimator):
+    def setup(self, ctx: SetupContext) -> None:
+        self.setup_rng = fnp.random.default_rng(ctx.seed)
+        # one-time random precompute — e.g. a (width, k) random projection
+        self.projection = self.setup_rng.standard_normal((ctx.width, 64))
+```
+
+Do **not** call `fnp.random.seed(ctx.seed)` (or `np.random.seed(ctx.seed)`) — that mutates the process-global RNG and breaks composability with other libraries. Use `fnp.random.default_rng(ctx.seed)` to get an isolated `Generator`.
+
+For deterministic estimators (mean propagation, covariance propagation, the zeros baseline), both `mlp.seed` and `ctx.seed` are irrelevant — you can ignore them. The `examples/01_random.py` walkthrough demonstrates the seeded pattern actively; `examples/02_*`, `03_*`, and `04_*` carry the scaffold without consuming it, so the pattern is visible whichever example you copy.
+
+`ctx.seed` and `mlp.seed` are independent: with `--dataset`, the dataset supplies `mlp.seed` values (baked at the dataset's own seed) while `--seed` controls `ctx.seed` only. See [Estimator Contract: Reproducibility](../reference/estimator-contract.md#reproducibility-under-the-grader-seed) for the full contract requirement.
 
 ---
 

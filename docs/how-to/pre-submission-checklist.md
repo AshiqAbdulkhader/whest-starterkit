@@ -42,14 +42,15 @@ checks; each one maps to a single command or a one-line confirmation.
 - [ ] No network calls in `setup()` or `predict()`. The grader has no
       outbound network.
 - [ ] No time-based seeds (`time.time()`, `os.urandom`, …) and no
-      participant-chosen per-MLP seeds. If your estimator uses randomness
-      inside `predict()`, seed it from `mlp.seed`:
-      `fnp.random.default_rng(mlp.seed)`. Submissions that use their own
-      per-MLP seeds may be disqualified for prize eligibility — see
+      participant-chosen seeds. If your estimator uses randomness inside
+      `predict()`, seed it from `mlp.seed`:
+      `fnp.random.default_rng(mlp.seed)`. If your estimator uses randomness
+      inside `setup()` (e.g. a fixed random projection basis), seed it from
+      `ctx.seed`: `fnp.random.default_rng(ctx.seed)`. Custom seeds at either
+      site may be disqualified for prize eligibility — see
       [Estimator Contract: Reproducibility](../reference/estimator-contract.md#reproducibility-under-the-grader-seed).
-      Submission-level random precompute in `setup()` or `__init__()` can use
-      a hard-coded constant (e.g. `SETUP_SEED = 0xC0FFEE`) — `mlp.seed` is
-      not available there.
+      Do **not** call `fnp.random.seed(...)` — use `default_rng(...)` for an
+      isolated `Generator`.
 
 ## Sanity
 

@@ -92,6 +92,24 @@ Grader confirmed our scores match local (315616 = 3.807e-7, 315622 = 3.468e-7 gr
 
 Corrector v3 retraining on re-extracted full-split features (moment-matched MC), plus a second extraction pass at shifted MC seeds for noise-augmentation. Target: raw ~2.2-2.5e-6 → adjusted ~2.3e-7.
 
+### Round 3b: methodology fix and properly-powered sampler comparison
+
+**The 15-MLP sweeps above were subset noise.** Discovered when the full-split extraction landed: over 1000 MLPs, `fullL1_diag234` (4.86e-6) is *worse* than plain whitening (4.51e-6), and mini/full splits contain *different MLPs* (different seeds — which also means `whest run --split mini` is a clean holdout for full-split-trained correctors). Re-ran all variants paired over 200 full-split MLPs (`scripts/compare_samplers_200.py`):
+
+| Sampler | mean MSE (200 MLPs) |
+|---|---|
+| **mmL1 (antithetic + exact layer-1 moment match only)** | **3.87e-06** |
+| whiten + mmL1 | 4.01e-06 |
+| whiten (submissions #4/#5) | 4.39e-06 |
+| mm + diag pinning layers 2-4 | 4.68e-06 |
+| whiten + diag pinning 2-4 | 4.78e-06 |
+
+**Verdict:** exact layer-1 moment matching *replaces* whitening (1.13x better); diagonal pinning at layers 2-4 hurts (mech bias amplified by the chaotic forward dynamics — consistent with the mid-depth rule). Shipped sampler = mmL1 only.
+
+**Noise-floor decomposition** (two independent seeds, 30 MLPs): the whitened-MC error is **100% pure sampling noise** — systematic residual ≈ 0. Consequences: (a) the corrector's gain is optimal-shrinkage-toward-mech, with limited further headroom on these features; (b) `sem²` *overestimates* the true noise 2x (antithetic/whitening induce negative sample correlations); (c) below-floor score scales purely with per-sample variance — the leaders' 3.5x edge implies a structurally better estimator, not tuning.
+
+**Radial stratification** (chi-quantile norm remapping): +2% only — norms already concentrate at width 256. Not worth shipping.
+
 **Additional negative result — low-rank sampled tail** (`scripts/test_lowrank_tail.py`): deep-layer mech covariance is strongly rank-concentrated (rank-32 captures 94-97% of variance past layer 16), suggesting the deep-tail matmuls could run in coefficient space (`z = mu@W + c@(VᵀW) + diagonal-noise`) at ~2.7x lower per-sample cost, buying more samples. Measured: 14x bias blowup (3.6e-5 vs 2.6e-6 at equal N) — replacing the discarded orthogonal fluctuation with independent diagonal Gaussian noise destroys the true fluctuation structure that 24 layers of ReLU nonlinearity propagate, and breaks antithetic pairing. Consistent with the deep-pinning bias wall: He-init ReLU forward dynamics amplify mid-depth distributional perturbations, so any approximation injected at mid-depth costs more downstream than the variance it saves. **Rule of thumb established: approximate near the input (where exact moments exist) or at the output (where the corrector can learn the bias) — never in the middle.**
 
 ## Log

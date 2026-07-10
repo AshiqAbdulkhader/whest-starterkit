@@ -150,33 +150,31 @@ class Estimator(BaseEstimator):
         return fnp.matmul(evecs * d, evecs.T)
 
     def _moment_matched_mc(self, mlp: MLP, n_pairs: int, targets, cov_l1):
-        """Antithetic MC with exact layer-1 moment matching (full covariance)
-        and diagonal (mean+variance) pinning at layers 2..4 to the K=2 mech
-        trajectory. Antithetic kills odd-order noise; the layer-1 affine
-        renormalization kills everything entering through the first two
-        moments of h1 (exact targets, O(1/N)-bias only); the diagonal pinning
-        trades a corrector-learnable systematic bias for variance."""
+        """Antithetic MC with exact layer-1 moment matching (full covariance).
+
+        Antithetic pairs kill all odd-order noise; the layer-1 affine
+        renormalization pins the batch's empirical mean and full covariance
+        of h1 to their EXACT closed-form values (z1 is exactly Gaussian), so
+        everything entering through h1's first two moments is annihilated at
+        O(1/N)-bias cost only. Deeper pinning to mech targets was measured to
+        HURT over 200 MLPs (mech bias amplifies through the chaotic forward
+        dynamics) -- layer 1 only."""
         rng = fnp.random.default_rng(mlp.seed)
         width = mlp.width
         u = fnp.array(rng.standard_normal((n_pairs, width)).astype(fnp.float64))
         x = fnp.concatenate([u, -u], axis=0)
         n_batch = float(2 * n_pairs)
-        n_match = len(targets)
+        m_t = targets[0][0]
         for li, w in enumerate(mlp.weights):
             x = fnp.maximum(fnp.matmul(x, w), 0.0)
-            if li < n_match:
-                m_t, var_t = targets[li]
+            if li == 0:
                 mu_emp = fnp.mean(x, axis=0)
                 xc = x - mu_emp
-                if li == 0:
-                    cov_emp = fnp.matmul(xc.T, xc) / n_batch
-                    A = fnp.matmul(
-                        self._mat_sqrt(cov_emp, inv=True), self._mat_sqrt(cov_l1)
-                    )
-                    x = fnp.matmul(xc, A) + m_t
-                else:
-                    var_emp = fnp.maximum(fnp.mean(xc * xc, axis=0), 1e-24)
-                    x = xc * fnp.sqrt(fnp.maximum(var_t, 0.0) / var_emp) + m_t
+                cov_emp = fnp.matmul(xc.T, xc) / n_batch
+                A = fnp.matmul(
+                    self._mat_sqrt(cov_emp, inv=True), self._mat_sqrt(cov_l1)
+                )
+                x = fnp.matmul(xc, A) + m_t
         mc_mean = fnp.mean(x, axis=0)
         mc_sem = fnp.std(x, axis=0) / n_batch**0.5
         return mc_mean, mc_sem

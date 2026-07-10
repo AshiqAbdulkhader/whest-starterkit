@@ -134,20 +134,17 @@ def antithetic_mc(Ws, n_pairs, seed, mm_targets=None, cov_l1=None):
     rng = np.random.default_rng(seed)
     u = rng.standard_normal((n_pairs, n)).astype(np.float64)
     x = np.concatenate([u, -u], axis=0)
-    n_match = len(mm_targets) if mm_targets is not None else 0
+    m_t = mm_targets[0][0] if mm_targets else None
     for li, w in enumerate(Ws):
         x = np.maximum(x @ w, 0.0)
-        if li < n_match:
-            m_t, var_t = mm_targets[li]
+        if li == 0 and cov_l1 is not None and m_t is not None:
+            # exact layer-1 moment matching only; deeper pinning measured to
+            # hurt over 200 MLPs (mech bias amplifies through depth)
             mu_emp = x.mean(axis=0)
             xc = x - mu_emp
-            if li == 0 and cov_l1 is not None:
-                cov_emp = (xc.T @ xc) / len(x)
-                A = _mat_sqrt(cov_emp, inv=True) @ _mat_sqrt(cov_l1)
-                x = xc @ A + m_t
-            else:
-                var_emp = np.maximum((xc * xc).mean(axis=0), 1e-24)
-                x = xc * np.sqrt(np.maximum(var_t, 0.0) / var_emp) + m_t
+            cov_emp = (xc.T @ xc) / len(x)
+            A = _mat_sqrt(cov_emp, inv=True) @ _mat_sqrt(cov_l1)
+            x = xc @ A + m_t
     mc_mean = x.mean(axis=0)
     mc_sem = x.std(axis=0) / np.sqrt(x.shape[0])
     return mc_mean, mc_sem

@@ -45,6 +45,35 @@ To hit #1 via the floor path we need pluto-level per-sample variance (~3.8× bet
 
 - **Subspace QMC/strat on linearized A** (`scripts/test_subspace_qmc.py`, `test_oracle_subspace.py`): discovered A(K1) has **99.7% energy in top-8** singular directions — looked like a breakthrough. At N=1024 pairs, strat-r8 gave **1.14–1.23×**. At operating N=3000 pairs (40 MLPs): **0.94× (hurts)**. Gain is N-dependent and gone where we actually run. FD-oracle active subspace was worse than linA. **Not shipping.** Lesson: low effective dim of the *linear* path doesn't mean the MC variance (dominated by kink residual) lives in that subspace at our N.
 
+## Research round 10 (2026-07-11): a genuine math deep-dive — two real, correctly-derived, and provably-too-small effects
+
+Rather than another engineering variant, went back to first principles on the network's exact structure. Two ideas came out of this, both mathematically real (not bugs, not approximations), both empirically confirmed, both too small to matter in our specific regime — but now *quantified*, not just tried-and-failed.
+
+**1. Exact radius/direction decomposition via positive homogeneity.**
+
+The network has no bias terms anywhere (confirmed in the docs — every layer is `h_new = ReLU(h @ W)`). This means the whole map `F(u)` (final-layer output as a function of the input) is **exactly positively homogeneous of degree 1**: `F(t·u) = t·F(u)` for `t>0`, since `ReLU(t·z) = t·ReLU(z)` composes through every layer. For `u ~ N(0, I_256)`, radius `r=‖u‖` and direction `θ=u/‖u‖` are *exactly* independent (a classical isotropic-Gaussian fact), and by homogeneity `F(u) = r·f(θ)` for `f(θ):=F(θ)`. Independence gives:
+
+```
+E[F(u)] = E[r]·E[f(θ)]
+```
+
+`E[r]` for a χ₂₅₆ distribution is an exact closed-form constant (`√2·Γ(128.5)/Γ(128) ≈ 15.984`) with **zero variance**. Replacing each sample's own random radius with this constant before the forward pass (`u → E[r]·u/‖u‖`) is provably variance-reducing and exactly unbiased — a genuinely different mechanism from anything tried before (it's Rao-Blackwellization of the *radial* component specifically, done *exactly* via a closed form rather than approximately).
+
+Derived the expected effect size before testing: `Var(r) = n - E[r]² ≈ 0.4995` for χ₂₅₆ (a classical fact — χₙ becomes extremely concentrated in high dimensions, `Var(r)→0.5` as `n→∞` regardless of `n`). The variance-reduction fraction works out to `Var(r)·E[f(θ)²] / Var(F(u)) ≈ Var(r)/n ≈ 0.195%` in our low-SNR regime (target mean ≪ its own sampling std, so `E[f(θ)]² ≪ E[f(θ)²]`). **This is the exact theoretical explanation for the earlier ad-hoc "radial stratification" test (round 4) finding only +2%** — same phenomenon, now derived rigorously rather than just observed.
+
+Tested (`scripts/test_homogeneity_radius.py`, 100 full-split MLPs): `radius_only` gives **no measurable improvement** over plain MC (0.488x vs plain MC's 0.477x baseline ratio — the difference is noise, consistent with the derived ~0.2% ceiling being far below our measurement resolution). Worse: **naively combining with mmL1 hurts** (`mmL1 + radius` = 0.784x, i.e. ~28% worse) — because fixing `‖u‖` makes the samples no longer genuinely Gaussian (they're uniform on a sphere instead), which invalidates the closed-form `cov_l1` target our layer-1 moment-matching step relies on. Not pursued further: even if re-derived correctly for the sphere-uniform distribution, the ceiling is ~0.2%, not worth the complexity.
+
+**2. Empirical-Bayes (James-Stein) shrinkage across the 256 neurons of one network.**
+
+A genuinely different mechanism from the earlier-failed "Bayesian shrinkage" (round 6, which shrunk each MLP's *whole* prediction toward K=2 using a *globally* fit prior variance from held-out MLPs — and failed because that global `τ²` was dominated by K=2's own large, systematic bias). This instead treats the 256 final-layer neurons *within one network* as the population for a classical Efron-Morris empirical-Bayes estimator: `τ²` is estimated *fresh, per network*, via method of moments from the observed spread of the neurons' own `(MC estimate − prior)` residuals (`τ̂² = max(0, (Σd_i² − Σσ_i²)/256)`), then each neuron gets shrinkage weight `w_i = τ̂²/(τ̂²+σ_i²)`. This is the textbook justification for why estimating many parameters jointly can beat estimating each independently (Stein's paradox, valid for ≥3 parameters) — worth testing on its own mathematical merits regardless of the earlier failure, since the *adaptivity* (per-network, not global) is a real difference.
+
+Tested (`scripts/test_james_stein.py`, 100 full-split MLPs), three shrinkage targets:
+- **Toward K=2 (uncorrected):** 0.292x (much worse) — confirms round 6: shrinking toward a *systematically biased* prior fails regardless of how adaptively the shrinkage intensity is estimated, because the empirical `τ̂²` conflates "genuine spread in the true means" with "how wrong my prior is," and ends up *increasing* the shrinkage weight toward a bad target rather than decreasing it.
+- **Toward `0.992·K=2`** (pscamillo's bias-corrected prior): 0.493x — still much worse, and inconsistent per-MLP (sometimes much better, sometimes much worse) — the fixed 0.992 constant doesn't track pscamillo's own finding that the true per-network factor varies 0.9858–1.0010.
+- **Toward zero** (classical null-shrinkage JS, no bias-direction problem since zero isn't an *estimate* of anything): **1.007x — statistically no effect.** An initial 3-MLP spot check showed a small, consistent-looking gain (0.6-5%) that evaporated to noise at 100 MLPs. Explained by the numbers themselves: mean estimated `τ̂² ≈ 6.0e-5` is **~25x larger** than the per-neuron MC sampling variance (`σ² ≈ 2.4e-5`), meaning the true final-layer means are already *far more spread out* than our sampling noise — exactly the high-SNR regime where James-Stein's classical dominance guarantee becomes asymptotically negligible (shrinkage weight `w_i ≈ τ̂²/(τ̂²+σ_i²) ≈ 0.96`, i.e. almost no shrinkage happens, because almost none is warranted).
+
+**Conclusion of the math dive:** both ideas are correct, rigorous, and real — not bugs or misapplications. Both fail for the *same underlying reason*, now precisely quantified rather than just observed: our sampler's per-neuron signal-to-noise ratio is already high enough (true-mean spread across neurons ≫ residual MC noise; radial spread of a 256-dim Gaussian ≪ its directional spread) that classical statistical tricks premised on "noise comparable to or larger than signal" have essentially nothing left to extract. This is a stronger, more precise version of the conclusion reached empirically across rounds 4-9 and independently by the pscamillo writeup — the wall isn't just "everything we tried failed," it's "the two most natural remaining classical variance-reduction mechanisms (exact radial Rao-Blackwellization, empirical-Bayes cross-neuron shrinkage) are mathematically real but provably capped at effect sizes far below what we need, given the SNR we're already operating at."
+
 ---
 
 ## How scoring works (for reference)

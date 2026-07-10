@@ -61,7 +61,34 @@ Investigated whether the paper's K=3 "factored" cumulant propagation algorithm c
 
 **Artifacts:** patched port saved at `scratchpad/kprop_port/` this session (not committed — reference code, not our submission). Includes `port_np/kprop_np.py` with the added `kprop_layer_means_tail()` driver (negative result, kept for reference).
 
+## Research round 2 (2026-07-10): how the leaders actually do it
+
+Web research turned up the decisive hints:
+
+1. **ARC's own update** ([LessWrong announcement](https://www.lesswrong.com/posts/Kben8CzS4awCwNw5c/announcing-the-arc-white-box-estimation-challenge)): warm-up winners were "variants on the factorized 3rd cumulant propagation algorithm", and — crucially — "most top submissions combined **learned networks that consume the cumulant estimates as features**". Training is off-budget; only `predict()` FLOPs count. `examples/04_shipped_weights.py` shows the shipping mechanism (`flopscope.Module` → pickle-free `.npz`, 0 FLOPs to load in `setup()`).
+2. **ARC admits the depth weakness**: "Our existing algorithms scale poorly with depth, and so we expect there to be significant room for improvement" — phase 1 went to depth 32 deliberately to break pure cumulant propagation. Matches our finding that full-depth K=3 eats the whole budget.
+3. **[galfaroi's public repo](https://github.com/galfaroi/Can-You-Predict-a-Network-Without-Running-It-)**: whitened antithetic Monte Carlo (antithetic pairs `[u; -u]` + folding the empirical-covariance inverse-sqrt into the first weight matrix) scored **3.36e-7 adjusted** — ~1.3x behind the then-leader — with *no learned component at all*.
+4. **Scoring economics insight**: the 10% multiplier floor means anything up to 2.72e10 FLOPs is "free" (score multiplier is 0.1 regardless). Our K=2 submission used only 0.6% — we were leaving ~15x more free compute on the table. Antithetic sampling kills all odd-order MC noise; whitening kills all quadratic noise (empirical covariance is exactly identity ⇒ any quadratic form's sample average equals its expectation).
+
+**Measured locally (10 mini MLPs, phase-1 shape):**
+| Estimator | raw final-layer MSE | notes |
+|---|---|---|
+| K=2 covariance propagation | 8.4e-5 | submission #3 |
+| antithetic MC, 2750 pairs | 1.03e-5 | odd-noise cancellation |
+| whitened antithetic MC, 2750 pairs | 4.45e-6 | +2.31x from whitening |
+| **hybrid in-harness (whest run)** | **2.22e-6** | adjusted **2.52e-7** at mult 0.113 |
+
+Learned corrector status: concept validated on mini (2.6x over K=2 from 14 features/100 MLPs; MC-noise is *not* learnable — must be reduced at the source, hence whitening). Full-split feature extraction (1000 MLPs, ~26k neuron-rows... 256k rows) running; corrector will ship as submission #5.
+
 ## Log
+
+### 2026-07-10 — Submission #4: whitened antithetic MC + mechanistic hybrid
+
+- **What:** Complete estimator rewrite. `predict()` now runs (a) K=1+K=2 propagation (features + non-final-layer rows), (b) whitened antithetic Monte Carlo (2750 pairs, `C^{-1/2}` folded into layer-1 weights, seeded from `mlp.seed`), and (c) an optional learned per-neuron corrector loaded from `corrector.npz` (not yet shipped in this submission — falls back to plain whitened MC). ~2.4e10 analytical FLOPs ≈ 8.8% of budget → at the 0.1 multiplier floor on the grader. Git tag: `submission-4`.
+- **Local result** (10 mini MLPs): `adjusted_final_layer_score` **2.52e-07**, raw `final_layer_mse` 2.22e-06, multiplier 0.113 (local residual-time artifact; analytical is 8.8%).
+- **Leaderboard result:** submission id **315616** — ~33x better than submission #3; would sit around rank 12-15 on the current leaderboard (leader: 9.16e-8).
+- **Learned:** (1) The multiplier floor makes ≤2.72e10 FLOPs free — use all of it. (2) Antithetic + whitening are the two exact variance-annihilation tricks (odd orders + quadratic). (3) MC noise cannot be regressed away post-hoc — variance reduction must happen at the sampling stage; learned models are for the *mechanistic bias*, not the noise.
+- **Next:** submission #5 = this + trained corrector (in progress on the 1000-MLP full split).
 
 ### 2026-07-10 — Submission #3: covariance propagation (full off-diagonal)
 

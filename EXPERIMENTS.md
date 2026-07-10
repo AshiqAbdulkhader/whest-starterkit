@@ -43,6 +43,8 @@ To hit #1 via the floor path we need pluto-level per-sample variance (~3.8× bet
 - **Corrector capacity**: 2×96 already at the 1.2× ridge ceiling on current 20 features; spectral weight SVDs as extra features slightly *hurt* (1.15× vs 1.18×). Signal-limited, not capacity-limited.
 - **Still open for the 3× VR gap to pluto:** higher-order / exact-distribution sampling of h1, QMC on the effective subspace of the linearized map, cheap partial-K=3 features for a better corrector, or a weight→mean learned model that replaces most of the sampling.
 
+- **Subspace QMC/strat on linearized A** (`scripts/test_subspace_qmc.py`, `test_oracle_subspace.py`): discovered A(K1) has **99.7% energy in top-8** singular directions — looked like a breakthrough. At N=1024 pairs, strat-r8 gave **1.14–1.23×**. At operating N=3000 pairs (40 MLPs): **0.94× (hurts)**. Gain is N-dependent and gone where we actually run. FD-oracle active subspace was worse than linA. **Not shipping.** Lesson: low effective dim of the *linear* path doesn't mean the MC variance (dominated by kink residual) lives in that subspace at our N.
+
 ---
 
 ## How scoring works (for reference)

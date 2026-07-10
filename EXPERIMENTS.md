@@ -82,6 +82,18 @@ Learned corrector status: concept validated on mini (2.6x over K=2 from 14 featu
 
 ## Log
 
+### 2026-07-10 — Submission #5: + learned corrector trained on the full public split
+
+- **What:** Submission #4's pipeline plus the learned per-neuron corrector, shipped as a folder submission (`submission/` = `estimator.py` + `corrector.npz`). Corrector: 20 features per final-layer neuron (K=1/K=2 predictions, pre-activation stats, off-diagonal covariance strength, MC estimate/SEM/disagreement, 4-layer mean trajectory) → 2×96 tanh MLP → residual from the whitened-MC estimate. Trained on the full public split (1000 MLPs × 256 neurons = 256k rows, 15% MLP-grouped holdout, zero-init output layer so it can only improve on the MC baseline). Git tag: `submission-5`.
+- **Local result** (full mini split, 100 MLPs): `adjusted_final_layer_score` **3.96e-07** (raw 3.95e-06, multiplier 0.1005) vs **4.86e-07** (raw 4.84e-06) for the identical pipeline without the corrector — 1.23x, matching the offline grouped-holdout ratio exactly (3.91e-6 → 3.17e-6).
+- **Leaderboard result:** submission id **315622** — https://www.aicrowd.com/challenges/arc-white-box-estimation-challenge-2026/submissions/315622. Expected ~rank 15-20 (leader 9.16e-8).
+- **Learned / negative results this round:**
+  - **Telescoping layerwise control variate is provably redundant with antithetic sampling** — with antithetic pairs the input sample mean is exactly zero, and the linear CV telescopes to the identity (verified: bit-identical output). Ascender's 4x CV gain was measured *without* antithetic inputs.
+  - **Scrambled-Sobol QMC doesn't help** at 256 dims / 2750 points (0.86x — slightly worse than pseudo-random).
+  - **MC noise is not learnable** — the corrector's val loss ≈ 0.69 of residual variance means it removes the mech-predictable ~31% (whitening bias + shrinkage) and the rest is genuine sampling noise.
+  - **Scoring-economics dead end**: beyond the 10% floor, MSE ∝ 1/N cancels multiplier ∝ N exactly — extra samples are score-neutral. The leaders' edge at multiplier 0.26 implies their per-sample residual variance is ~6x lower than ours (0.0028 vs 0.017), i.e. they have a structurally better variance-reduction or estimation scheme, not just more compute.
+- **Next ideas:** quartic+ control variates (antithetic+whitening kill orders 1-3; the remaining noise is 4th-order+), learned control variates with analytically-known expectation, partial-depth sampling with mech-corrected restarts, K=3 features for the corrector.
+
 ### 2026-07-10 — Submission #4: whitened antithetic MC + mechanistic hybrid
 
 - **What:** Complete estimator rewrite. `predict()` now runs (a) K=1+K=2 propagation (features + non-final-layer rows), (b) whitened antithetic Monte Carlo (2750 pairs, `C^{-1/2}` folded into layer-1 weights, seeded from `mlp.seed`), and (c) an optional learned per-neuron corrector loaded from `corrector.npz` (not yet shipped in this submission — falls back to plain whitened MC). ~2.4e10 analytical FLOPs ≈ 8.8% of budget → at the 0.1 multiplier floor on the grader. Git tag: `submission-4`.

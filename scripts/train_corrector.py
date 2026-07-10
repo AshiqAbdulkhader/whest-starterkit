@@ -167,11 +167,11 @@ def main():
           f"({base_mse_va/mse_corr:.1f}x better than K=2 alone)")
 
     # save flat arrays for flopscope.Module (pickle-free npz)
+    # keys must exactly match the Corrector Module's public attributes
     save = {
         "feat_mu": mu_f,
         "feat_sd": sd_f,
         "y_sd": np.asarray(y_sd),
-        "n_layers": np.asarray(len(params)),
     }
     for i, (W, b) in enumerate(params):
         save[f"W{i}"] = W

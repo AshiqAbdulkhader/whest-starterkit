@@ -43,19 +43,40 @@ def mean_prop(Ws):
     return mu, var
 
 
-def cov_prop(Ws, collect_last_k: int = 2):
-    """K=2: full covariance propagation (gain method).
+def relu_cov_exact(W1):
+    """Exact mean/cov of ReLU(u @ W1) for u ~ N(0, I): z1 is exactly Gaussian,
+    so the bivariate Gaussian ReLU expectation applies in closed form."""
+    G = W1.T @ W1
+    sigma = np.sqrt(np.maximum(np.diagonal(G), 1e-24))
+    rho = np.clip(G / np.outer(sigma, sigma), -1.0, 1.0)
+    m = sigma / math.sqrt(2 * math.pi)
+    second = (np.outer(sigma, sigma) / (2 * math.pi)) * (
+        np.sqrt(np.maximum(1 - rho * rho, 0.0)) + rho * (math.pi / 2 + np.arcsin(rho))
+    )
+    cov = second - np.outer(m, m)
+    return m, cov
 
-    Returns dict with final-layer per-neuron quantities and the mean vectors
-    of the last `collect_last_k` layers (for trend features).
+
+def cov_prop(Ws, collect_last_k: int = 2, collect_targets_k: int = 4):
+    """K=2 covariance propagation: exact bivariate formula at layer 1,
+    gain method for layers >= 2.
+
+    Returns (final_mean, final-layer artifacts dict). The dict also carries
+    `targets`: per-layer (mean, var_diagonal) for the first
+    `collect_targets_k` layers plus the full layer-1 covariance -- consumed
+    by the moment-matched Monte Carlo sampler.
     """
     n = Ws[0].shape[0]
-    mu = np.zeros(n)
-    cov = np.eye(n)
     means_hist = []
     final = {}
+    targets = []
     L = len(Ws)
-    for li, w in enumerate(Ws):
+    mu, cov = relu_cov_exact(Ws[0])
+    cov_l1 = cov.copy()
+    targets.append((mu.copy(), np.diagonal(cov).copy()))
+    if L - collect_last_k <= 0:
+        means_hist.append(mu.copy())
+    for li, w in enumerate(Ws[1:], start=1):
         mu_pre = w.T @ mu
         cov_pre = np.einsum("ij,ia,jb->ab", cov, w, w, optimize=True)
         var_pre = np.maximum(np.diagonal(cov_pre), 1e-12)
@@ -68,11 +89,11 @@ def cov_prop(Ws, collect_last_k: int = 2):
         gain = np.where(sigma_pre > 1e-12, Phi, 0.0)
         cov = np.outer(gain, gain) * cov_pre
         np.fill_diagonal(cov, var_post)
+        if li < collect_targets_k:
+            targets.append((mu.copy(), var_post.copy()))
         if li >= L - collect_last_k:
             means_hist.append(mu.copy())
         if li == L - 1:
-            # row-sum magnitude of off-diagonal covariance: how non-diagonal
-            # the joint distribution is at this neuron
             offdiag_strength = (np.abs(cov).sum(axis=1) - np.abs(np.diagonal(cov)))
             final = dict(
                 mu_pre=mu_pre, sigma_pre=sigma_pre, alpha=alpha,
@@ -80,36 +101,53 @@ def cov_prop(Ws, collect_last_k: int = 2):
                 offdiag_strength=offdiag_strength,
             )
     final["means_hist"] = means_hist
+    final["targets"] = targets
+    final["cov_l1"] = cov_l1
     return mu, final
 
 
-def antithetic_mc(Ws, n_pairs, seed, whiten=True):
-    """Whitened antithetic Monte Carlo through the MLP.
+def _mat_sqrt(C, inv=False):
+    evals, evecs = np.linalg.eigh(C)
+    evals = np.maximum(evals, 1e-12)
+    d = 1.0 / np.sqrt(evals) if inv else np.sqrt(evals)
+    return (evecs * d) @ evecs.T
 
-    Antithetic pairs (u, -u) kill all odd-order noise components exactly;
-    whitening (folding C^{-1/2} of the empirical input covariance into the
-    first weight matrix so the sample covariance is exactly identity) kills
-    all quadratic noise components. Residual noise is higher-order only.
 
-    Returns (mc_mean, mc_sem) per final-layer neuron. Exact draw equality
-    with the grader is not required -- the combiner only relies on the
-    statistical relationship (near-unbiased estimate with ~Var/N noise).
+def antithetic_mc(Ws, n_pairs, seed, mm_targets=None, cov_l1=None):
+    """Moment-matched antithetic Monte Carlo ("fullL1_diag234").
+
+    Antithetic pairs (u, -u) kill all odd-order noise exactly. Then the batch
+    is affinely renormalized at layer 1 so its empirical mean and FULL
+    covariance exactly equal the analytic ones (z1 is exactly Gaussian, so
+    both are closed-form -- no bias beyond O(1/N) from the data-dependent
+    affine map). At layers 2..4 the batch's mean and per-neuron variance are
+    pinned (diagonal match) to the K=2 mech trajectory; that bias is
+    systematic and corrector-learnable, while the retained samples carry the
+    true higher-moment structure.
+
+    mm_targets: list of (mean, var_diag) for layers 1..k from cov_prop.
+    cov_l1: exact full layer-1 covariance from relu_cov_exact.
+
+    Returns (mc_mean, mc_sem) per final-layer neuron.
     """
     n = Ws[0].shape[0]
     rng = np.random.default_rng(seed)
     u = rng.standard_normal((n_pairs, n)).astype(np.float64)
-    if whiten:
-        # empirical covariance of the antithetic batch [u; -u] is u^T u * 2/N
-        C = (u.T @ u) / n_pairs
-        evals, evecs = np.linalg.eigh(C)
-        C_inv_sqrt = (evecs / np.sqrt(np.maximum(evals, 1e-12))) @ evecs.T
-        W1 = C_inv_sqrt @ Ws[0]  # fold whitening into the first layer
-    else:
-        W1 = Ws[0]
     x = np.concatenate([u, -u], axis=0)
-    x = np.maximum(x @ W1, 0.0)
-    for w in Ws[1:]:
+    n_match = len(mm_targets) if mm_targets is not None else 0
+    for li, w in enumerate(Ws):
         x = np.maximum(x @ w, 0.0)
+        if li < n_match:
+            m_t, var_t = mm_targets[li]
+            mu_emp = x.mean(axis=0)
+            xc = x - mu_emp
+            if li == 0 and cov_l1 is not None:
+                cov_emp = (xc.T @ xc) / len(x)
+                A = _mat_sqrt(cov_emp, inv=True) @ _mat_sqrt(cov_l1)
+                x = xc @ A + m_t
+            else:
+                var_emp = np.maximum((xc * xc).mean(axis=0), 1e-24)
+                x = xc * np.sqrt(np.maximum(var_t, 0.0) / var_emp) + m_t
     mc_mean = x.mean(axis=0)
     mc_sem = x.std(axis=0) / np.sqrt(x.shape[0])
     return mc_mean, mc_sem
@@ -126,7 +164,10 @@ def features_for_mlp(Ws, mlp_seed, n_mc_pairs=2750, collect_last_k=5):
     while len(hist) < collect_last_k:
         hist = [hist[0]] + hist
 
-    mc_mean, mc_sem = antithetic_mc(Ws, n_mc_pairs, seed=mlp_seed)
+    mc_mean, mc_sem = antithetic_mc(
+        Ws, n_mc_pairs, seed=mlp_seed,
+        mm_targets=fin["targets"], cov_l1=fin["cov_l1"],
+    )
 
     cols = [
         mu2,                       # 0 K=2 prediction (base estimate)
@@ -159,6 +200,7 @@ def main():
     ap.add_argument("--split", default="mini")
     ap.add_argument("--out", required=True)
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--seed-offset", type=int, default=0)
     args = ap.parse_args()
 
     import whestbench.dataset as wds
@@ -171,7 +213,7 @@ def main():
         row = d[i]
         Ws = [np.asarray(w, dtype=np.float64) for w in row["weights"]]
         truth = np.asarray(row["final_means"], dtype=np.float64)
-        feats, mu2, mc_mean = features_for_mlp(Ws, mlp_seed=row["mlp_seed"])
+        feats, mu2, mc_mean = features_for_mlp(Ws, mlp_seed=row["mlp_seed"] + args.seed_offset)
         all_feats.append(feats)
         all_base.append(mu2)
         all_mc.append(mc_mean)

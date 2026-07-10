@@ -82,15 +82,37 @@ class Estimator(BaseEstimator):
             var = fnp.maximum(ez2 - mu * mu, 0.0)
         return mu
 
-    def _cov_prop(self, mlp: MLP):
-        """K=2 covariance propagation. Returns (rows, final-layer artifacts)."""
+    def _relu_cov_exact(self, W1):
+        """Exact mean/cov of ReLU(u @ W1): z1 is exactly Gaussian, so the
+        bivariate Gaussian ReLU expectation applies in closed form."""
+        import math
+
+        G = fnp.matmul(W1.T, W1)
+        sigma = fnp.sqrt(fnp.maximum(fnp.diag(G), 1e-24))
+        outer_s = fnp.outer(sigma, sigma)
+        rho = fnp.clip(G / outer_s, -1.0, 1.0)
+        m = sigma / math.sqrt(2 * math.pi)
+        second = (outer_s / (2 * math.pi)) * (
+            fnp.sqrt(fnp.maximum(1 - rho * rho, 0.0))
+            + rho * (math.pi / 2 + fnp.arcsin(rho))
+        )
+        cov = second - fnp.outer(m, m)
+        return m, cov
+
+    def _cov_prop(self, mlp: MLP, n_targets: int = 4):
+        """K=2 covariance propagation: exact bivariate formula at layer 1,
+        gain method after. Returns (rows, final-layer artifacts); artifacts
+        include the moment-matching targets for the MC sampler."""
         width = mlp.width
-        mu = fnp.zeros(width)
-        cov = fnp.eye(width)
         rows = []
         fin = {}
         depth = len(mlp.weights)
-        for li, w in enumerate(mlp.weights):
+        targets = []
+        mu, cov = self._relu_cov_exact(mlp.weights[0])
+        cov_l1 = cov
+        targets.append((mu, fnp.diag(cov)))
+        rows.append(mu)
+        for li, w in enumerate(mlp.weights[1:], start=1):
             mu_pre = w.T @ mu
             cov_pre = fnp.einsum("ij,ia,jb->ab", cov, w, w)
             var_pre = fnp.maximum(fnp.diag(cov_pre), 1e-12)
@@ -107,30 +129,56 @@ class Estimator(BaseEstimator):
             cov = fnp.multiply(fnp.outer(gain, gain), cov_pre)
             fnp.fill_diagonal(cov, var_post)
             rows.append(mu)
+            if li < n_targets:
+                targets.append((mu, var_post))
             if li == depth - 1:
                 offdiag = fnp.sum(fnp.abs(cov), axis=1) - fnp.abs(fnp.diag(cov))
                 fin = dict(
                     mu_pre=mu_pre, sigma_pre=sigma_pre, alpha=alpha,
                     phi=phi, Phi=Phi, var_post=var_post, offdiag=offdiag,
                 )
+        fin["targets"] = targets
+        fin["cov_l1"] = cov_l1
         return rows, fin
 
     # --- Monte Carlo --------------------------------------------------------
 
-    def _whitened_antithetic_mc(self, mlp: MLP, n_pairs: int):
+    def _mat_sqrt(self, C, inv=False):
+        evals, evecs = fnp.linalg.eigh(C)
+        evals = fnp.maximum(evals, 1e-12)
+        d = 1.0 / fnp.sqrt(evals) if inv else fnp.sqrt(evals)
+        return fnp.matmul(evecs * d, evecs.T)
+
+    def _moment_matched_mc(self, mlp: MLP, n_pairs: int, targets, cov_l1):
+        """Antithetic MC with exact layer-1 moment matching (full covariance)
+        and diagonal (mean+variance) pinning at layers 2..4 to the K=2 mech
+        trajectory. Antithetic kills odd-order noise; the layer-1 affine
+        renormalization kills everything entering through the first two
+        moments of h1 (exact targets, O(1/N)-bias only); the diagonal pinning
+        trades a corrector-learnable systematic bias for variance."""
         rng = fnp.random.default_rng(mlp.seed)
         width = mlp.width
         u = fnp.array(rng.standard_normal((n_pairs, width)).astype(fnp.float64))
-        C = fnp.matmul(u.T, u) / float(n_pairs)
-        evals, evecs = fnp.linalg.eigh(C)
-        inv_sqrt = fnp.matmul(evecs / fnp.sqrt(fnp.maximum(evals, 1e-12)), evecs.T)
         x = fnp.concatenate([u, -u], axis=0)
-        w0 = fnp.matmul(inv_sqrt, mlp.weights[0])
-        x = fnp.maximum(fnp.matmul(x, w0), 0.0)
-        for w in mlp.weights[1:]:
+        n_batch = float(2 * n_pairs)
+        n_match = len(targets)
+        for li, w in enumerate(mlp.weights):
             x = fnp.maximum(fnp.matmul(x, w), 0.0)
+            if li < n_match:
+                m_t, var_t = targets[li]
+                mu_emp = fnp.mean(x, axis=0)
+                xc = x - mu_emp
+                if li == 0:
+                    cov_emp = fnp.matmul(xc.T, xc) / n_batch
+                    A = fnp.matmul(
+                        self._mat_sqrt(cov_emp, inv=True), self._mat_sqrt(cov_l1)
+                    )
+                    x = fnp.matmul(xc, A) + m_t
+                else:
+                    var_emp = fnp.maximum(fnp.mean(xc * xc, axis=0), 1e-24)
+                    x = xc * fnp.sqrt(fnp.maximum(var_t, 0.0) / var_emp) + m_t
         mc_mean = fnp.mean(x, axis=0)
-        mc_sem = fnp.std(x, axis=0) / float(2 * n_pairs) ** 0.5
+        mc_sem = fnp.std(x, axis=0) / n_batch**0.5
         return mc_mean, mc_sem
 
     # --- main ---------------------------------------------------------------
@@ -147,7 +195,9 @@ class Estimator(BaseEstimator):
         rows, fin = self._cov_prop(mlp)
         mu2 = rows[-1]
         mu1 = self._mean_prop(mlp)
-        mc_mean, mc_sem = self._whitened_antithetic_mc(mlp, n_pairs)
+        mc_mean, mc_sem = self._moment_matched_mc(
+            mlp, n_pairs, fin["targets"], fin["cov_l1"]
+        )
 
         final_pred = mc_mean
         if self._corrector is not None:
@@ -175,7 +225,7 @@ class Estimator(BaseEstimator):
                 res = (fnp.matmul(h, c.W2) + c.b2)[:, 0]
                 final_pred = mc_mean + res * c.y_sd
             except Exception:
-                final_pred = mc_mean  # fail-safe: plain whitened-antithetic MC
+                final_pred = mc_mean  # fail-safe: plain moment-matched MC
 
         out_rows = rows[:-1] + [final_pred]
         return fnp.stack(out_rows, axis=0)

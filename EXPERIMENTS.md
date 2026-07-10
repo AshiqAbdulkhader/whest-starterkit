@@ -80,6 +80,18 @@ Web research turned up the decisive hints:
 
 Learned corrector status: concept validated on mini (2.6x over K=2 from 14 features/100 MLPs; MC-noise is *not* learnable — must be reduced at the source, hence whitening). Full-split feature extraction (1000 MLPs, ~26k neuron-rows... 256k rows) running; corrector will ship as submission #5.
 
+## Research round 3 (2026-07-10): moment-matched sampling (post-rank-71 push)
+
+Grader confirmed our scores match local (315616 = 3.807e-7, 315622 = 3.468e-7 graded) — rank 71 just means the field is packed between 9e-8 and 3.5e-7. Needed: 4x+ more variance reduction. Findings:
+
+1. **First-layer regression control variates fail** (`scripts/test_h1_cv.py`): using centered basis functions of z1 (exactly Gaussian ⇒ exact expectations) as cross-fitted regression CVs *loses* to whitening — the K=256-basis regression noise (K/N ≈ 10-28%) eats the gains, and h1's linear content is already covered by antithetic (odd) + whitening (quadratic).
+2. **Layer-1 moment matching wins** (`scripts/test_h1_momentmatch.py`): z1 is exactly Gaussian, so both E[h1] *and* Cov[h1] have closed forms (bivariate Gaussian ReLU formula). Affinely renormalizing the sampled batch so its empirical mean/cov exactly equal the analytic ones kills all noise entering through h1's first two moments — **1.23x** over whitening alone, and it *replaces* whitening (combining both is worse than matching alone).
+3. **Deep pinning to mech targets has a bias wall** (`scripts/test_deep_momentmatch.py`): matching layers 1..T against the K=2 mech trajectory (full-cov or diagonal) improves through T≈2-4, then mech bias dominates (T=8: 3.8e-5; T=32: 7.8e-5 ≈ pure mech error). Partial (shrunk) pinning at deeper layers also fails (`test_hybrid_momentmatch.py`).
+4. **Winner: `fullL1_diag234`** — exact full-covariance match at layer 1 + diagonal (mean+var) pinning at layers 2-4 to the K=2 trajectory: **2.78e-6** (vs whitening 4.45e-6, **1.60x**) at ~+2e9 FLOPs. In-harness without corrector: raw 3.16e-6 on 15 mini MLPs.
+5. Bonus: the K=2 pass now uses the exact bivariate ReLU covariance at layer 1 (previously the gain approximation there too).
+
+Corrector v3 retraining on re-extracted full-split features (moment-matched MC), plus a second extraction pass at shifted MC seeds for noise-augmentation. Target: raw ~2.2-2.5e-6 → adjusted ~2.3e-7.
+
 ## Log
 
 ### 2026-07-10 — Submission #5: + learned corrector trained on the full public split

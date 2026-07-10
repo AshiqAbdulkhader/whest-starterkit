@@ -1,15 +1,17 @@
 """Test: quasi-Monte Carlo (scrambled Sobol) input in place of pseudo-random.
 
-Sobol sequences have discrepancy O((log N)^d / N) vs pseudo-random's
-O(1/sqrt(N)) -- for smooth low-effective-dimension integrands this beats
-plain MC even in fairly high dimensions. Scrambled (Owen-scrambled) Sobol
-retains an unbiased randomized-QMC estimator with a valid (if pessimistic)
-variance estimate from independent scrambles.
-
-Compares (200 full-split MLPs, budget-matched ~2750 antithetic pairs):
-  mmL1       : current submission sampler (pseudo-random + antithetic + L1 match)
-  qmc_mmL1   : scrambled Sobol (base-2, antithetic via first-half/second-half
-               digital-shift trick) + same L1 moment matching
+CORRECTED after an initial run wrongly showed a 1.30x win: the original
+`run_mmL1` rounded Sobol's sample count UP to the next power of 2 above
+`2*n_pairs` (5500 -> 8192, i.e. giving Sobol **49% more samples** than the
+plain-MC comparator at the SAME nominal `n_pairs`). Re-run at a properly
+matched N (both exactly 4096, the largest power of 2 that still fits the
+budget) shows the true effect is ~1.04x -- statistically indistinguishable
+from noise. See scripts/sobol_np.py and EXPERIMENTS.md for the full story
+(including why Sobol's balance properties -- and hence any real benefit --
+only hold at power-of-2 N, and why a 32-layer ReLU forward pass is exactly
+the high-effective-dimension, non-smooth regime where QMC's advantages are
+known to evaporate). Kept as a methodological lesson: always match sample
+counts/FLOP budgets exactly before crediting a technique with a win.
 """
 
 from __future__ import annotations

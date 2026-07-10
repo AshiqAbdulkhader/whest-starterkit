@@ -92,6 +92,8 @@ Grader confirmed our scores match local (315616 = 3.807e-7, 315622 = 3.468e-7 gr
 
 Corrector v3 retraining on re-extracted full-split features (moment-matched MC), plus a second extraction pass at shifted MC seeds for noise-augmentation. Target: raw ~2.2-2.5e-6 → adjusted ~2.3e-7.
 
+**Additional negative result — low-rank sampled tail** (`scripts/test_lowrank_tail.py`): deep-layer mech covariance is strongly rank-concentrated (rank-32 captures 94-97% of variance past layer 16), suggesting the deep-tail matmuls could run in coefficient space (`z = mu@W + c@(VᵀW) + diagonal-noise`) at ~2.7x lower per-sample cost, buying more samples. Measured: 14x bias blowup (3.6e-5 vs 2.6e-6 at equal N) — replacing the discarded orthogonal fluctuation with independent diagonal Gaussian noise destroys the true fluctuation structure that 24 layers of ReLU nonlinearity propagate, and breaks antithetic pairing. Consistent with the deep-pinning bias wall: He-init ReLU forward dynamics amplify mid-depth distributional perturbations, so any approximation injected at mid-depth costs more downstream than the variance it saves. **Rule of thumb established: approximate near the input (where exact moments exist) or at the output (where the corrector can learn the bias) — never in the middle.**
+
 ## Log
 
 ### 2026-07-10 — Submission #5: + learned corrector trained on the full public split

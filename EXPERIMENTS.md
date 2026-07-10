@@ -28,6 +28,35 @@ All three bundled examples spend <1% of budget, so they all bottom out at the 0.
 
 ---
 
+## Leaderboard target (checked 2026-07-10)
+
+Top of the live leaderboard clusters around `adjusted_final_layer_score` ≈ **1e-7 to 2e-7**:
+
+| Rank | Participant | Adjusted score | `final_layer_mse` |
+|---|---|---|---|
+| 1 | andrew_epstein | 9.16e-8 | 3.55e-7 |
+| 2 | pluto | 9.27e-8 | 9.27e-7 |
+| 3 | SOX (team) | 1.40e-7 | 3.73e-7 |
+| 5 | ionel_chiosa | 1.51e-7 | 3.20e-7 |
+
+That's ~100-1000x better raw MSE than our covariance-propagation (K=2) baseline (8.4e-5). The gap points squarely at the companion paper's higher-order **cumulant propagation** (K=3/K=4), not incremental tuning of K≤2.
+
+## Research: K=3 cumulant propagation feasibility at our depth (2026-07-10)
+
+Investigated whether the paper's K=3 "factored" cumulant propagation algorithm can hit leaderboard-level accuracy within our FLOP budget. Findings:
+
+1. **Found a directly relevant reference implementation**: [ascender1729/whestbench-cumulant-propagation](https://github.com/ascender1729/whestbench-cumulant-propagation) (MIT) — an independent NumPy/flopscope port of ARC's official `mlp_cumulant_propagation` repo, built specifically for this challenge. Its `RESULTS.md` documents confirmed live-grader submissions at the **warmup shape (depth=8)**: k=3 factored cumulant propagation scored `adjusted_final_layer_score` ≈ **6.65e-7 to 7.53e-7** — squarely in leaderboard territory — vs ~3.6e-6 for covariance-propagation-only at that depth.
+2. **The vendored code didn't run as-is** against our current `whestbench 0.12.0rc3` / `flopscope 0.8.0rc5` (it targeted `flopscope 0.5.0`). Two classes of bugs, both from flopscope's array immutability being enforced more strictly now:
+   - `arr += x` / `arr *= x` etc. on flopscope-wrapped arrays now raise `TypeError` ("flopscope arrays are immutable"). Fixed ~40 call sites across `factor_k3_np.py`, `harmonic_np.py`, `cumulants_np.py`, `diagslice_np.py`, `kprop_np.py`, `wick_np.py`, `partitions_np.py` by rewriting in-place ops as reassignment (`x = x + y`).
+   - `np.zeros_like` / `np.ones_like` on a flopscope-wrapped array raise `TypeError: no implementation found ... __array_function__`. Fixed 8 sites by replacing with `x * 0`, `x * 0 + 1`.
+   - After both fixes, `kprop_layer_means(Ws, k_max=3, kind=SIMPLE, factor=True)` runs correctly and produces sane, non-degenerate output (verified: its own K=2 path gives `final_layer_mse` 1.334e-4 on our test MLP, essentially identical to our own trusted `examples/03_covariance_propagation.py`'s 1.334e-4 on the same MLP — confirms the port is numerically correct, not just "runs without crashing").
+3. **Cost problem: our shape is much deeper than what's been validated.** The paper's factored-K3 runtime is `O(L² n^K)` — quadratic in depth. The reference repo's numbers above are for **depth=8**; we're at **depth=32** (4x deeper → predicted 16x more expensive). Measured directly: full-depth K=3 costs **~2.7-3.0e11 analytical FLOPs — 99-110% of our entire 2.72e11 budget** — before even counting residual Python wall-time (which added another ~45% of budget-equivalent from cold `@cache` misses in one run). One direct `whest run` attempt at full depth **exceeded budget and got zeroed** (effective compute 143% of B).
+4. **Tried "layer-adaptive routing" to cut cost — doesn't work.** Idea: cheap K=2 (covariance) propagation for the first `L - tail` layers, then switch to expensive factored K=3 only for the last `tail` layers (implemented as `kprop_layer_means_tail()`, restarting the K=3 phase from the head's output mean/covariance treated as a fresh Gaussian). Measured across `tail` = 0, 4, 6, 8, 10, 12, 16, 20, 24 layers: `final_layer_mse` stayed flat at **~1.2e-4 to 1.3e-4 regardless of tail length** — i.e., adding an expensive K=3 tail barely moves the needle over plain K=2. Root cause (consistent with the paper's own error-scaling conjecture, MSE ~ `c_K(L/n)^K`): the head's K=2 pass already bakes in a whole-network-scale approximation error that a K=3 tail cannot retroactively correct — K=3 tracking only helps if it covers the layers where the correlations it's designed to capture actually build up, which is the **whole depth**, not just the end.
+
+**Conclusion:** matching the leaderboard's ~1e-7 requires full-depth K=3 (or higher) cumulant propagation, which is right at (or slightly over) our FLOP budget with the current reference port's implementation — this needs real performance engineering (better cache reuse across the depth loop, tighter einsum paths, maybe a leaner "BASE" kind or an actually-quadratic-cost-reducing algorithmic tweak), not just a bug fix, to land reliably under budget. This is a good next research thread but is a bigger lift than a single session.
+
+**Artifacts:** patched port saved at `scratchpad/kprop_port/` this session (not committed — reference code, not our submission). Includes `port_np/kprop_np.py` with the added `kprop_layer_means_tail()` driver (negative result, kept for reference).
+
 ## Log
 
 ### 2026-07-10 — Submission #2: mean propagation (diagonal variance)

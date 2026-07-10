@@ -7,6 +7,42 @@ Tracks every approach tried for `estimator.py`, what it scored, and what we lear
 
 **Companion paper:** Wu, Lecomte, Winer, Robinson, Hilton, Christiano — *"Estimating the expected output of wide random MLPs more efficiently than sampling"* ([arXiv:2605.05179](https://arxiv.org/pdf/2605.05179)). Core idea: represent activation distributions via cumulants / Hermite expansions instead of drawing samples, giving both theoretical and empirical advantages over Monte Carlo for wide networks — exactly the estimation problem this challenge poses.
 
+## Research round 9 (2026-07-11): floor push + map of dead ends + leaderboard strategy split
+
+**Leaderboard snapshot (2026-07-11):** two distinct winning strategies, not one:
+
+| Rank | Who | Adjusted | Raw MSE | Implied mult | Strategy |
+|---|---|---|---|---|---|
+| 1 | andrew_epstein | 9.16e-8 | 3.55e-7 | **0.26** | high-accuracy, mid compute |
+| 2 | pluto | 9.27e-8 | 9.27e-7 | **0.10** | floor-efficient VR (~3.8× better raw than us at same mult) |
+| 3 | kaileh57 | 1.36e-7 | 2.09e-7 | **0.65** | spend budget for raw accuracy |
+| 21 | jeremy43 | 2.18e-7 | 2.34e-7 | **0.93** | nearly full budget |
+| 40 | german_alfaro (galfaroi) | 2.77e-7 | 2.26e-6 | 0.12 | whitened antithetic reference |
+
+To hit #1 via the floor path we need pluto-level per-sample variance (~3.8× better raw at 10% util). High-compute paths need structurally lower σ² — pure 1/N scaling above the floor is nearly score-neutral.
+
+**Community intel — [galfaroi's public writeup](https://github.com/galfaroi/Can-You-Predict-a-Network-Without-Running-It-):** production = folded-whitening + half-cov antithetic at frac=0.155, graded 3.36e-7. Confirms our earlier ladder; their diagnostics also kill active subspaces, layer-skip MLMC, GC-with-sample-moments, weight SVD. Useful engineering: float32 RNG, fold `Σ^{-1/2}` into W₀, half-cov from antithetic symmetry, zeros for non-final rows.
+
+### Experiments this round
+
+1. **Gate statistics** (`scripts/test_gate_stats.py`): deep-layer gates are NOT uniformly frozen. Layer 32 mean flip-rate 5%, but p90≈21% and ~13 expected flips/sample. Kills naive frozen-gate-tail / full-tail freeze. Selective freeze (high-`|α|` only) left as lower priority after other kills.
+
+2. **Budget sweep** (`scripts/test_budget_sweep.py`, 40 full-split MLPs): mmL1 alone at 2750 pairs was only **8.5% util** — leaving free floor budget on the table. Pushing pairs→3000 (~10% with K=2 overhead) is a free ~1.1× raw MSE win at the floor. Above-floor (7k–10k pairs) adj bottoms around 2.74e-7 sampler-only — cannot reach pluto without better VR.
+
+3. **Gram-Charlier ceiling** (`scripts/test_gc_ceiling.py`): `gc_oracle_all` MSE 2.25e-7 (14.8× vs mmL1) looks huge, but same-batch GC and even oracle-skew/kurt with batch μ/σ give **0.99× (no gain)**. The ceiling is "accurate final-preact moments," not a free formula on top of our current samples. Matches galfaroi.
+
+4. **Low-rank h1→hL regression CV** (`scripts/test_lowrank_cv.py`): ranks 4–32, antithetic or whitened — all **0.63–0.70× vs mmL1** (worse). Same failure mode as h1_cv / quartic Hermite: early-layer→final correlation too weak for cross-fitted regression to beat mmL1.
+
+5. **Linearization CV / selective-freeze MLMC**: scripts written; lowrank result + prior MLMC kill make these low-priority. Not blocking the floor-push submit.
+
+### 2026-07-11 — Submission #7: floor-budget push (3000 pairs)
+
+- **What:** Same mmL1 + corrector v4 as #6, but `N_MC_PAIRS` 2750→3000 and `_MC_BUDGET_FRACTION` 0.085→0.094 so analytical util sits on the 10% multiplier floor instead of ~8.8%. Git tag: `submission-7`.
+- **Why:** Budget sweep showed we were donating free accuracy by under-using the floor.
+- **Local result** (full mini, 100 MLPs): `adjusted_final_layer_score` **3.50e-07** (raw 3.03e-06, mult 0.116 local residual) vs #6's 3.83e-07 (raw 3.52e-06) — ~1.09× adjusted, ~1.16× raw.
+- **Leaderboard result:** submission id **315680** — https://www.aicrowd.com/challenges/arc-white-box-estimation-challenge-2026/submissions/315680.
+- **Next:** need ~3× better per-sample variance to catch pluto at the floor. Priority queue: (a) bigger/better corrector with richer features + noise-aug, (b) importance sampling, (c) any VR that improves σ² itself rather than just N.
+
 ## How scoring works (for reference)
 
 - `adjusted_final_layer_score` (leaderboard metric) = mean over MLPs of `final_layer_mse × max(0.1, C_m/B)`.

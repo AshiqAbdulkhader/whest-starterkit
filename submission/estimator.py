@@ -29,11 +29,13 @@ import flopscope.numpy as fnp
 from whestbench import MLP, BaseEstimator, SetupContext
 
 CORRECTOR_FILE = "corrector.npz"
-# 2750 pairs -> ~2.39e10 analytical FLOPs (8.8% of budget). Locally the
-# residual wall-time charge pushes utilization to ~11%, but on the grading
-# hardware residual is negligible (confirmed by prior participants' live
-# results), so this sits at the 0.1 multiplier floor there.
-N_MC_PAIRS = 2750
+# 3000 pairs -> ~2.61e10 analytical FLOPs (~9.6% of budget) + ~1.6e9 K=2
+# ~= 10.2% total. Targets the 0.1 multiplier floor exactly. Prior 2750 left
+# ~1% of free floor budget unused (see EXPERIMENTS.md budget sweep).
+# On the grader residual wall-time is negligible; locally it may nudge ~11%.
+N_MC_PAIRS = 3000
+# Fraction of budget allocated to MC pairs (rest reserved for K=2 / overhead).
+_MC_BUDGET_FRACTION = 0.094
 TRAJ_LAYERS = 5  # final layer + 4 previous layers of K=2 means as features
 
 
@@ -188,7 +190,7 @@ class Estimator(BaseEstimator):
         # scale MC size down if the budget is smaller than the phase-1 one
         # (e.g. whest validate runs a tiny MLP with a tiny budget)
         per_pair = 2 * depth * (2 * width * width + width) + 8 * width * width
-        n_pairs = int(min(N_MC_PAIRS, max(8, (0.085 * budget) / max(per_pair, 1))))
+        n_pairs = int(min(N_MC_PAIRS, max(8, (_MC_BUDGET_FRACTION * budget) / max(per_pair, 1))))
 
         rows, fin = self._cov_prop(mlp)
         mu2 = rows[-1]

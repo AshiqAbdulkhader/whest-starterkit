@@ -35,13 +35,15 @@ To hit #1 via the floor path we need pluto-level per-sample variance (~3.8× bet
 
 5. **Linearization CV / selective-freeze MLMC**: scripts written; lowrank result + prior MLMC kill make these low-priority. Not blocking the floor-push submit.
 
-### 2026-07-11 — Submission #7: floor-budget push (3000 pairs)
+### Round 9b follow-ups (same day, post-submit)
 
-- **What:** Same mmL1 + corrector v4 as #6, but `N_MC_PAIRS` 2750→3000 and `_MC_BUDGET_FRACTION` 0.085→0.094 so analytical util sits on the 10% multiplier floor instead of ~8.8%. Git tag: `submission-7`.
-- **Why:** Budget sweep showed we were donating free accuracy by under-using the floor.
-- **Local result** (full mini, 100 MLPs): `adjusted_final_layer_score` **3.50e-07** (raw 3.03e-06, mult 0.116 local residual) vs #6's 3.83e-07 (raw 3.52e-06) — ~1.09× adjusted, ~1.16× raw.
-- **Leaderboard result:** submission id **315680** — https://www.aicrowd.com/challenges/arc-white-box-estimation-challenge-2026/submissions/315680.
-- **Next:** need ~3× better per-sample variance to catch pluto at the floor. Priority queue: (a) bigger/better corrector with richer features + noise-aug, (b) importance sampling, (c) any VR that improves σ² itself rather than just N.
+- **Importance sampling** (`scripts/test_importance_sampling.py`, 30 MLPs): scale-IS (s∈{0.9,1.1,1.25}) and sensitivity-tilt IS all catastrophic (0.00–0.43× vs mmL1). Weight degeneracy / ESS collapse. **Killed.**
+- **Low-rank h1→hL CV** (`scripts/test_lowrank_cv.py`): ranks 4–32 on antithetic or whitened — all 0.63–0.70×. **Killed.**
+- **Joint cross-neuron residual** (`scripts/test_joint_residual.py`): MC residual (truth−mmL1) is diffuse — top-29 PCs only 35% energy (unlike pscamillo's K=2 residual). Oracle PC-r100 ceiling only 1.83×; learnable joint predictors ≈1.03×. Confirms residual is isotropic sampling noise. **Killed as a path to 3×.**
+- **Corrector capacity**: 2×96 already at the 1.2× ridge ceiling on current 20 features; spectral weight SVDs as extra features slightly *hurt* (1.15× vs 1.18×). Signal-limited, not capacity-limited.
+- **Still open for the 3× VR gap to pluto:** higher-order / exact-distribution sampling of h1, QMC on the effective subspace of the linearized map, cheap partial-K=3 features for a better corrector, or a weight→mean learned model that replaces most of the sampling.
+
+---
 
 ## How scoring works (for reference)
 

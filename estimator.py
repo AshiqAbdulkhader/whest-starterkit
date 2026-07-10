@@ -11,15 +11,41 @@ import argparse
 import importlib.util
 from pathlib import Path
 
+import flopscope as flops
 import flopscope.numpy as fnp
 from whestbench import MLP, BaseEstimator
 
 
 class Estimator(BaseEstimator):
+    """Mean propagation: track per-neuron mean and diagonal variance through
+    each ReLU layer via the analytical ReLU expectation formula (assumes
+    independent neurons, i.e. ignores off-diagonal covariance).
+    """
+
     def predict(self, mlp: MLP, budget: int) -> fnp.ndarray:
-        # TODO: replace this all-zeros baseline with your idea.
-        _ = budget
-        return fnp.zeros((mlp.depth, mlp.width))
+        _ = budget  # ~11M FLOPs at width=256/depth=32, well under budget
+        width = mlp.width
+
+        mu = fnp.zeros(width)
+        var = fnp.ones(width)
+
+        rows = []
+        for w in mlp.weights:
+            mu_pre = w.T @ mu
+            var_pre = fnp.maximum((w * w).T @ var, 1e-12)
+            sigma_pre = fnp.sqrt(var_pre)
+            alpha = mu_pre / sigma_pre
+
+            phi_alpha = flops.stats.norm.pdf(alpha)
+            Phi_alpha = flops.stats.norm.cdf(alpha)
+
+            mu = mu_pre * Phi_alpha + sigma_pre * phi_alpha
+            ez2 = (mu_pre * mu_pre + var_pre) * Phi_alpha + mu_pre * sigma_pre * phi_alpha
+            var = fnp.maximum(ez2 - mu * mu, 0.0)
+
+            rows.append(mu)
+
+        return fnp.stack(rows, axis=0)
 
 
 def _load_baseline(name: str) -> type[BaseEstimator]:

@@ -131,6 +131,20 @@ Reconfirmed via the grader API that submission #6 graded at 3.02e-7 (matches loc
 
 **Methodological lesson banked for future comparisons:** when a variance-reduction candidate requires rounding sample count to satisfy some structural constraint (power-of-2 for Sobol, etc.), always verify the comparator uses the *same* rounded N — round-up asymmetry silently inflates apparent gains by exactly the sample-count ratio, and that ratio (1.2-1.5x here) is uncomfortably close to the range of gains we're actually hunting for in this challenge.
 
+## Research round 5 (2026-07-10): K=3 rank-truncation, tested and rejected
+
+With the sampling side exhausted (round 4), attempted the remaining identified lever: bound the factored K=3 tensor's `O(L²)` rank growth via truncation, to fit full-depth K=3 propagation under budget (round 1 showed untruncated full-depth K=3 costs ~99-110% of the 2.72e11 budget).
+
+**Instrumented the actual rank growth first** (patched port from round 1, `port_np/factor_k3_np.py`'s `FactoredTensor.add_factors_`): rank grows by ~256-512 per layer, reaching **23,552 by layer 32** at width 256. Tracing *why*: two of the `add_factors_` calls per layer include a `fac2 = np.eye(n) * 3` term — an exactly full-rank (rank-256) identity contribution, not accumulated noise. This is a structural fact about the algorithm (that term captures a specific diagram in the cumulant expansion that is inherently full-rank), not an implementation inefficiency.
+
+**Tested two truncation schemes on depth=8** (where a trusted N=2e6-Monte-Carlo ground truth and the untruncated K=3 baseline — MSE 1.44e-6 — are cheap to compute):
+1. **Random Gaussian projection** (shared random sketch matrix applied to all 3 CP modes, a standard JL-style rank-reduction trick): MSE degrades monotonically and badly — 7.65e-6 at cap=4000 (barely below the untruncated ceiling), 4.0e-5 at cap=2000, 7.0e-3 at cap=500. **5x worse even at the mildest cap tested.**
+2. **SVD-based projection** (stack all 3 modes, take a shared top-singular-vector subspace — theoretically "smarter" since it's data-driven, not random): **worse still** — 2.9e-3 at cap=4000, 0.25 at cap=2000 (i.e., no better than the zeros baseline). Stacking all 3 modes into one SVD ignores the tensor's symmetric trilinear contraction structure, actively corrupting it more than a naive random sketch does.
+
+**Verdict: rejected.** Both are decisive, order-of-magnitude failures, not marginal ones — this isn't a case for more tuning. Recovering the L² cost would require a properly tensor-decomposition-aware compression (e.g., an ALS-based CP-rank reduction that explicitly minimizes reconstruction error of the *actual* trilinear tensor, respecting its symmetric structure and treating the identity-derived full-rank component separately from the compressible part) — a genuine, nontrivial numerical-methods research problem in its own right, not an engineering afternoon, with no guarantee it would even work given how badly the two most natural naive approaches failed. Not pursued further given the effort/uncertain-payoff balance.
+
+**Conclusion for this challenge, current state:** both identified major levers (deeper sampling-side variance reduction, and squeezing K=3 under budget via rank truncation) have now been tried and closed off with well-documented negative results. Submission #6 (mmL1 sampler + learned corrector, graded 3.02e-7, rank 50) stands as our best validated result. Closing the remaining ~3x gap to the leaderboard's top 20 (raw MSE ~2e-7 to 1.7e-6) likely needs either a genuinely new algorithmic idea not yet identified, or the harder tensor-decomposition research above.
+
 ### 2026-07-10 — Submission #6: mmL1 sampler + corrector retrained on it
 
 - **What:** Submission #5's pipeline with the sampler fix from the 200-MLP comparison above (whitening removed, replaced by antithetic + exact layer-1 moment matching only) and the corrector retrained on features extracted with the new sampler (1000-MLP full split). Same 20-feature / 2×96-tanh architecture. Git tag: `submission-6`.

@@ -59,6 +59,18 @@ Investigated whether the paper's K=3 "factored" cumulant propagation algorithm c
 
 ## Log
 
+### 2026-07-10 — Submission #3: covariance propagation (full off-diagonal)
+
+- **What:** Replaced diagonal mean propagation in `estimator.py` with full covariance propagation — tracks the (width x width) covariance matrix through each ReLU layer using the "gain" approximation for off-diagonal terms and the exact ReLU marginal variance on the diagonal, ported from `examples/03_covariance_propagation.py`. Git tag: `submission-3`.
+- **Why:** Safe, already-validated incremental win while K=3 cumulant-propagation performance work continues (see research section above) — ~11x better raw MSE than mean propagation, still <1% of budget.
+- **Local result** (`whest run --split mini --runner local`, public `mini` split, 100 MLPs, 256×32 @ 2.72e11 budget):
+  - `adjusted_final_layer_score` = **8.37e-06** (vs 9.48e-05 for submission #2 — ~11x better)
+  - `final_layer_mse` = 8.37e-05, `all_layers_mse` = 5.57e-05
+  - Best MLP 1.80e-06, worst MLP 3.27e-05
+  - FLOPs used: 1.62e9/MLP → 0.8% of budget → multiplier still floored at 0.1
+- **Leaderboard result:** submission id **315610** — https://www.aicrowd.com/challenges/arc-white-box-estimation-challenge-2026/submissions/315610. Still ~90x short of the leaderboard's ~1e-7 (see research section above); K=3 cumulant propagation is the path to close that gap, pending the budget-fit work.
+- **Next:** Finish squeezing full-depth K=3 cumulant propagation under budget (cache-reuse/perf work on the patched `mlp_cumulant_propagation` port).
+
 ### 2026-07-10 — Submission #2: mean propagation (diagonal variance)
 
 - **What:** Replaced the zeros baseline in `estimator.py` with diagonal mean propagation — tracks per-neuron mean and variance through each ReLU layer via the analytical ReLU expectation formula (assumes independent neurons), ported from `examples/02_mean_propagation.py`. Git tag: `submission-2` (commit at time of submit).

@@ -17,22 +17,42 @@ from whestbench import MLP, BaseEstimator
 
 
 class Estimator(BaseEstimator):
-    """Mean propagation: track per-neuron mean and diagonal variance through
-    each ReLU layer via the analytical ReLU expectation formula (assumes
-    independent neurons, i.e. ignores off-diagonal covariance).
+    """Covariance propagation: track per-neuron mean and the full covariance
+    matrix through each ReLU layer. Off-diagonal covariance uses the "gain"
+    approximation (cov_post[i,j] ~= gain[i]*gain[j]*cov_pre[i,j]); the
+    diagonal uses the exact ReLU marginal variance. ~1.6B FLOPs at
+    width=256/depth=32 (<1% of budget) -- see EXPERIMENTS.md for how this
+    compares to mean propagation and to the K=3 cumulant-propagation
+    research in progress.
     """
 
+    # If any diagonal entry of the covariance exceeds this value we rescale
+    # to keep the arithmetic well-behaved in float32.
+    _COV_RESCALE_THRESHOLD = 1e100
+
     def predict(self, mlp: MLP, budget: int) -> fnp.ndarray:
-        _ = budget  # ~11M FLOPs at width=256/depth=32, well under budget
+        _ = budget
         width = mlp.width
 
         mu = fnp.zeros(width)
-        var = fnp.ones(width)
+        cov = fnp.eye(width)
+        log_scale = 0.0
 
         rows = []
         for w in mlp.weights:
+            cov_diag = fnp.diag(cov)
+            max_var = float(fnp.max(cov_diag))
+            if max_var > self._COV_RESCALE_THRESHOLD:
+                s = float(fnp.sqrt(max_var))
+                mu = mu / s
+                cov = cov / (s * s)
+                log_scale += float(fnp.log(s))
+
             mu_pre = w.T @ mu
-            var_pre = fnp.maximum((w * w).T @ var, 1e-12)
+            # einsum (not chained w.T @ cov @ w) so flopscope tags cov_pre
+            # as symmetric, avoiding a SymmetryLossWarning downstream.
+            cov_pre = fnp.einsum("ij,ia,jb->ab", cov, w, w)
+            var_pre = fnp.maximum(fnp.diag(cov_pre), 1e-12)
             sigma_pre = fnp.sqrt(var_pre)
             alpha = mu_pre / sigma_pre
 
@@ -41,9 +61,18 @@ class Estimator(BaseEstimator):
 
             mu = mu_pre * Phi_alpha + sigma_pre * phi_alpha
             ez2 = (mu_pre * mu_pre + var_pre) * Phi_alpha + mu_pre * sigma_pre * phi_alpha
-            var = fnp.maximum(ez2 - mu * mu, 0.0)
+            var_post = fnp.maximum(ez2 - mu * mu, 0.0)
 
-            rows.append(mu)
+            sigma_np = fnp.asarray(sigma_pre, dtype=fnp.float64)
+            Phi_np = fnp.asarray(Phi_alpha, dtype=fnp.float64)
+            gain_np = fnp.where(sigma_np > 1e-12, Phi_np, 0.0)
+            gain = fnp.array(gain_np.astype(fnp.float32))
+
+            cov = fnp.multiply(fnp.outer(gain, gain), cov_pre)
+            fnp.fill_diagonal(cov, var_post)
+
+            scale_factor = float(fnp.exp(log_scale))
+            rows.append(mu * scale_factor)
 
         return fnp.stack(rows, axis=0)
 
